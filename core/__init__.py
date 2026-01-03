@@ -1,1 +1,1 @@
-"""Core game engine module."""
+"""Core game components."""

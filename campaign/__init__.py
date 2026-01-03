@@ -1,1 +1,1 @@
-"""Campaign module."""
+"""Campaign management components."""
