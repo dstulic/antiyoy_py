@@ -1,0 +1,14 @@
+# Core testing and development dependencies
+pytest>=9.0.0
+ruff>=0.1.0
+
+# Web framework (for future web interface)
+flask>=3.0.0
+
+# Machine learning (for future ML support)
+# Note: torch will install CUDA dependencies automatically if CUDA is available
+numpy>=1.24.0
+torch>=2.0.0
+
+# Utilities
+typing-extensions>=4.5.0
