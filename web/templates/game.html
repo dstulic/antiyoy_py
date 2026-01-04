@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Game - Antiyoy</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/game.css') }}">
+</head>
+<body>
+    <div class="game-container">
+        <!-- Hamburger Menu -->
+        <div class="hamburger-menu">
+            <button class="hamburger-icon" id="hamburgerBtn" onclick="toggleMenu()">
+                <span></span>
+                <span></span>
+                <span></span>
+            </button>
+            
+            <div class="menu-overlay" id="menuOverlay" onclick="toggleMenu()"></div>
+            
+            <div class="menu-panel" id="menuPanel">
+                <div class="menu-header">
+                    <h2>Menu</h2>
+                    <button class="close-menu" onclick="toggleMenu()">×</button>
+                </div>
+                <div class="menu-items">
+                    <button class="menu-item" onclick="restartGame()">
+                        <span class="menu-icon">↻</span>
+                        Restart
+                    </button>
+                    <button class="menu-item" onclick="saveGame()">
+                        <span class="menu-icon">💾</span>
+                        Save
+                    </button>
+                    <button class="menu-item" onclick="exitGame()">
+                        <span class="menu-icon">←</span>
+                        Exit
+                    </button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Game Canvas -->
+        <div class="game-board" id="gameBoard">
+            <div class="game-loading">
+                <p>Loading game...</p>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        const levelIndex = {{ level_index }};
+    </script>
+    <script src="{{ url_for('static', filename='js/hex_grid.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/game_board.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/game.js') }}"></script>
+</body>
+</html>

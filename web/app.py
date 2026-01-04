@@ -1,0 +1,317 @@
+"""
+Flask application for Antiyoy web interface.
+"""
+
+import os
+import sys
+import time
+from pathlib import Path
+from collections import OrderedDict
+
+# Get the project root directory (parent of web/)
+PROJECT_ROOT = Path(__file__).parent.parent
+
+# Add project root to Python path so imports work
+# This must be done BEFORE any local imports
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+# Now we can import Flask and other dependencies
+from flask import Flask, render_template, jsonify, request, session
+
+ASSETS_ROOT = PROJECT_ROOT.parent / "antiyoy_hd" / "assets"
+
+app = Flask(__name__)
+app.secret_key = os.urandom(24)  # For session management
+
+# Configure static folders
+app.static_folder = 'static'
+app.template_folder = 'templates'
+
+# Store game sessions (in production, use a proper session store)
+# Using OrderedDict to maintain insertion order for oldest session tracking
+# Format: {session_id: {'game_state': ..., 'game_manager': ..., 'level_index': ..., 'created_at': ...}}
+game_sessions = OrderedDict()
+MAX_ACTIVE_SESSIONS = 5
+
+
+def cleanup_oldest_session():
+    """
+    Remove the oldest session if we've reached the limit.
+    OrderedDict maintains insertion order, so the first item is the oldest.
+    """
+    if len(game_sessions) >= MAX_ACTIVE_SESSIONS:
+        # Remove the oldest session (first item in OrderedDict)
+        oldest_session_id = next(iter(game_sessions))
+        del game_sessions[oldest_session_id]
+        print(f"Removed oldest session: {oldest_session_id} (limit reached)")
+
+
+@app.route('/')
+def index():
+    """Landing page."""
+    return render_template('index.html')
+
+
+@app.route('/campaign')
+def campaign_selector():
+    """Campaign selector page."""
+    from campaign.manager import CampaignManager
+    
+    campaign_manager = CampaignManager()
+    from campaign.levels import get_level_code
+    
+    levels = []
+    
+    # Get all available levels
+    last_level = campaign_manager.get_last_level_index()
+    for i in range(last_level + 1):
+        # Skip invalid levels (level code is "-" or too short)
+        level_code = get_level_code(i)
+        if not level_code or level_code == "-" or len(level_code) < 3:
+            continue
+        
+        level_type = campaign_manager.get_level_type(i)
+        difficulty = campaign_manager.get_difficulty(i)
+        levels.append({
+            'index': i,
+            'type': level_type.value,
+            'difficulty': difficulty.value,
+            'completed': campaign_manager.is_level_completed(i)
+        })
+    
+    return render_template('campaign_selector.html', levels=levels)
+
+
+@app.route('/game/<int:level_index>')
+def game(level_index):
+    """Game screen for a specific campaign level."""
+    return render_template('game.html', level_index=level_index)
+
+
+@app.route('/api/campaign/levels')
+def api_campaign_levels():
+    """API endpoint to get campaign levels."""
+    from campaign.manager import CampaignManager
+    
+    campaign_manager = CampaignManager()
+    from campaign.levels import get_level_code
+    
+    levels = []
+    
+    last_level = campaign_manager.get_last_level_index()
+    for i in range(last_level + 1):
+        # Skip invalid levels (level code is "-" or too short)
+        level_code = get_level_code(i)
+        if not level_code or level_code == "-" or len(level_code) < 3:
+            continue
+        
+        level_type = campaign_manager.get_level_type(i)
+        difficulty = campaign_manager.get_difficulty(i)
+        levels.append({
+            'index': i,
+            'type': level_type.value,
+            'difficulty': difficulty.value,
+            'completed': campaign_manager.is_level_completed(i)
+        })
+    
+    return jsonify({'levels': levels})
+
+
+@app.route('/api/game/init/<int:level_index>')
+def api_game_init(level_index):
+    """Initialize a game session for a campaign level."""
+    from save_load.decoder import GameStateDecoder
+    from campaign.levels import get_level_code
+    from core.game_manager import GameManager, GameMode
+    
+    try:
+        level_code = get_level_code(level_index)
+        
+        # Check if level code is valid
+        if not level_code or level_code == "-" or len(level_code) < 3:
+            return jsonify({
+                'success': False, 
+                'error': f'Invalid level code for level {level_index}. Level may not exist or be incomplete.'
+            }), 400
+        
+        decoder = GameStateDecoder()
+        result = decoder.decode(level_code)
+        # Decoder returns (game_state, campaign_index) tuple
+        if isinstance(result, tuple):
+            game_state, campaign_index = result
+        else:
+            game_state = result
+            campaign_index = -1
+        
+        # Check if decoding was successful
+        if game_state is None:
+            import traceback
+            error_details = traceback.format_exc()
+            print(f"Decode error for level {level_index}")
+            print(f"Level code length: {len(level_code)}")
+            print(f"Level code preview: {level_code[:100]}...")
+            print(f"Traceback: {error_details}")
+            return jsonify({
+                'success': False, 
+                'error': f'Failed to decode game state for level {level_index}. The level code may be corrupted or incomplete.'
+            }), 500
+        
+        # Create game manager
+        game_manager = GameManager(game_state, GameMode.CAMPAIGN)
+        
+        # Store in session (for now, use a simple dict - in production use proper session store)
+        session_id = session.get('session_id')
+        
+        # If session already exists, remove it from OrderedDict to update its position
+        # (move it to the end, making it the newest)
+        if session_id and session_id in game_sessions:
+            # Move existing session to end (making it newest)
+            game_sessions.move_to_end(session_id)
+        else:
+            # New session - check if we need to clean up
+            cleanup_oldest_session()
+            
+            # Generate new session ID if needed
+            if not session_id:
+                import uuid
+                session_id = str(uuid.uuid4())
+                session['session_id'] = session_id
+        
+        # Store session data with timestamp
+        game_sessions[session_id] = {
+            'game_state': game_state,
+            'game_manager': game_manager,
+            'level_index': level_index,
+            'created_at': time.time()
+        }
+        
+        # Move to end to mark as most recently used
+        game_sessions.move_to_end(session_id)
+        
+        # Return initial game state (simplified for now)
+        return jsonify({
+            'success': True,
+            'session_id': session_id,
+            'level_index': level_index
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/game/state')
+def api_game_state():
+    """Get current game state for rendering."""
+    session_id = session.get('session_id')
+    if not session_id or session_id not in game_sessions:
+        return jsonify({'error': 'No active game session'}), 404
+    
+    # Mark session as recently used (move to end)
+    game_sessions.move_to_end(session_id)
+    
+    session_data = game_sessions[session_id]
+    game_state = session_data.get('game_state')
+    
+    # Check if game state exists
+    if game_state is None:
+        return jsonify({'error': 'Game state not available'}), 500
+    
+    # Check if game_state has hexes attribute
+    if not hasattr(game_state, 'hexes'):
+        return jsonify({'error': 'Invalid game state structure'}), 500
+    
+    # Serialize hexes for rendering
+    hexes = []
+    if game_state.hexes:
+        for hex in game_state.hexes:
+            hex_data = {
+                'coordinate1': hex.coordinate1,
+                'coordinate2': hex.coordinate2,
+                'color': hex.color.value if hasattr(hex.color, 'value') else str(hex.color),
+                'piece': hex.piece.value if hex.piece and hasattr(hex.piece, 'value') else None,
+                'unit_id': hex.unit_id,
+                'fog': getattr(hex, 'fog', False)
+            }
+            hexes.append(hex_data)
+    
+    # Serialize player entities
+    entities = []
+    if hasattr(game_state, 'entities_manager') and game_state.entities_manager:
+        if hasattr(game_state.entities_manager, 'entities') and game_state.entities_manager.entities:
+            for entity in game_state.entities_manager.entities:
+                entity_data = {
+                    'type': entity.type.value if hasattr(entity.type, 'value') else str(entity.type),
+                    'color': entity.color.value if hasattr(entity.color, 'value') else str(entity.color),
+                    'name': entity.name
+                }
+                entities.append(entity_data)
+    
+    # Get current turn info
+    current_color = None
+    if hasattr(game_state, 'entities_manager') and game_state.entities_manager:
+        current_entity = game_state.entities_manager.get_current_entity()
+        if current_entity and hasattr(current_entity, 'color'):
+            current_color = current_entity.color.value if hasattr(current_entity.color, 'value') else str(current_entity.color)
+    
+    # Get turn info
+    turn_index = 0
+    lap = 0
+    if hasattr(game_state, 'turns_manager') and game_state.turns_manager:
+        turn_index = getattr(game_state.turns_manager, 'turn_index', 0)
+        lap = getattr(game_state.turns_manager, 'lap', 0)
+    
+    return jsonify({
+        'success': True,
+        'hexes': hexes,
+        'entities': entities,
+        'current_color': current_color,
+        'turn_index': game_state.turns_manager.turn_index if game_state.turns_manager else 0,
+        'lap': game_state.turns_manager.lap if game_state.turns_manager else 0
+    })
+
+
+@app.route('/api/game/action', methods=['POST'])
+def api_game_action():
+    """Submit a game action."""
+    session_id = session.get('session_id')
+    if not session_id or session_id not in game_sessions:
+        return jsonify({'error': 'No active game session'}), 404
+    
+    # Mark session as recently used (move to end)
+    game_sessions.move_to_end(session_id)
+    
+    data = request.get_json()
+    # TODO: Process action
+    return jsonify({'success': True})
+
+
+@app.route('/api/game/restart', methods=['POST'])
+def api_game_restart():
+    """Restart the current game."""
+    session_id = session.get('session_id')
+    if not session_id or session_id not in game_sessions:
+        return jsonify({'error': 'No active game session'}), 404
+    
+    session_data = game_sessions[session_id]
+    level_index = session_data['level_index']
+    
+    # Reinitialize the game (this will also update the session timestamp and move it to end)
+    return api_game_init(level_index)
+
+
+@app.route('/api/game/save', methods=['POST'])
+def api_game_save():
+    """Save the current game."""
+    session_id = session.get('session_id')
+    if not session_id or session_id not in game_sessions:
+        return jsonify({'error': 'No active game session'}), 404
+    
+    # Mark session as recently used (move to end)
+    game_sessions.move_to_end(session_id)
+    
+    # TODO: Implement save functionality
+    return jsonify({'success': True, 'message': 'Game saved'})
+
+
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0', port=5000)

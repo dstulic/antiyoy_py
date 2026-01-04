@@ -1,0 +1,102 @@
+/* Campaign Selector Styles */
+
+.campaign-container {
+    min-height: 100vh;
+    padding: 20px;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+.campaign-header {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    margin-bottom: 30px;
+    color: white;
+}
+
+.campaign-header h1 {
+    font-size: 2.5em;
+    font-weight: bold;
+}
+
+.campaign-levels {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 15px;
+    padding: 20px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 15px;
+    backdrop-filter: blur(10px);
+}
+
+.level-card {
+    aspect-ratio: 1;
+    background: rgba(255, 255, 255, 0.2);
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-radius: 12px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+}
+
+.level-card:hover {
+    transform: scale(1.05);
+    background: rgba(255, 255, 255, 0.3);
+    border-color: rgba(255, 255, 255, 0.5);
+}
+
+.level-card.completed {
+    background: rgba(76, 175, 80, 0.3);
+    border-color: rgba(76, 175, 80, 0.6);
+}
+
+.level-card.unlocked {
+    background: rgba(33, 150, 243, 0.3);
+    border-color: rgba(33, 150, 243, 0.6);
+}
+
+.level-card.unknown {
+    background: rgba(158, 158, 158, 0.2);
+    border-color: rgba(158, 158, 158, 0.4);
+    /* All levels are now clickable - removed disabled styling */
+    cursor: pointer;
+    opacity: 0.8;
+}
+
+.level-card.unknown:hover {
+    transform: scale(1.05);
+    background: rgba(158, 158, 158, 0.3);
+    border-color: rgba(158, 158, 158, 0.5);
+}
+
+.level-number {
+    font-size: 2em;
+    font-weight: bold;
+    color: white;
+    margin-bottom: 5px;
+}
+
+.level-info {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.8em;
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.level-difficulty {
+    text-transform: capitalize;
+    font-weight: 600;
+}
+
+.level-completed {
+    font-size: 1.5em;
+    color: #4caf50;
+}

@@ -152,3 +152,44 @@ encoder = GameStateEncoder()
 encoded = encoder.encode(game_state, campaign_level_index=1)
 print(f"Encoded to {len(encoded)} characters")
 ```
+
+## Web Interface
+
+### Setup Assets
+
+Before running the web interface, set up the game assets:
+
+```bash
+cd antiyoy_py/web
+python setup_assets.py
+```
+
+This will create a symlink (or copy on Windows) from the original game assets to the web static directory.
+
+### Run the Web Server
+
+Start the Flask development server:
+
+```bash
+cd antiyoy_py
+.venv/bin/python web/app.py
+```
+
+Or if the virtual environment is activated:
+
+```bash
+python web/app.py
+```
+
+The web interface will be available at `http://localhost:5000`
+
+### Web Interface Features
+
+- **Landing Page**: Main menu with campaign button
+- **Campaign Selector**: Browse and select available campaign levels
+- **Game Screen**: Play campaign levels with:
+  - Hamburger menu (top left) with options:
+    - Restart: Restart the current level
+    - Save: Save game progress
+    - Exit: Return to main menu
+  - Game board (rendering to be implemented)
