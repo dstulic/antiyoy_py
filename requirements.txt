@@ -1,5 +1,6 @@
 # Core testing and development dependencies
 pytest>=9.0.0
+pytest-cov>=4.0.0
 ruff>=0.1.0
 
 # Web framework (for future web interface)

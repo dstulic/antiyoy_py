@@ -70,9 +70,43 @@ pytest tests/test_hex.py::TestHex::test_hex_initialization -v
 ```
 
 ### Run tests with coverage:
+
+First, install the coverage plugin:
 ```bash
 pip install pytest-cov
-pytest tests/ --cov=core --cov=save_load --cov=players --cov=commands --cov=visibility --cov=ai -v
+```
+
+Generate coverage report (terminal output):
+```bash
+pytest tests/ --cov=core --cov=save_load --cov=players --cov=commands --cov=visibility --cov=ai --cov-report=term -v
+```
+
+Generate HTML coverage report:
+```bash
+pytest tests/ --cov=core --cov=save_load --cov=players --cov=commands --cov=visibility --cov=ai --cov-report=html -v
+```
+
+**View the HTML coverage report:**
+After running the command above, open the generated HTML report in your browser:
+```bash
+# On Linux/Mac:
+open htmlcov/index.html
+# Or:
+xdg-open htmlcov/index.html
+
+# On Windows:
+start htmlcov/index.html
+```
+
+The HTML report provides an interactive view showing:
+- Overall coverage percentage per module
+- Line-by-line coverage highlighting (green=covered, red=not covered)
+- File-by-file breakdown
+- Missing line indicators
+
+You can also combine both terminal and HTML reports:
+```bash
+pytest tests/ --cov=core --cov=save_load --cov=players --cov=commands --cov=visibility --cov=ai --cov-report=term --cov-report=html -v
 ```
 
 ### Run tests and show print statements:
