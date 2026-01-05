@@ -235,8 +235,11 @@ class ProvincesBuilder:
                 continue
             if not hex.is_colored():
                 continue
-            if not hex.is_adjacent_to_hexes_of_same_color():
+            # Skip gray (neutral) hexes that aren't part of a province
+            if hex.color == HColor.GRAY and not hex.is_adjacent_to_hexes_of_same_color():
                 continue
+            # For non-gray hexes, always create a province (even if single-hex)
+            # The wave worker will handle both multi-hex and single-hex provinces
             self._build_province(hex)
 
     def _check_permission(self) -> None:

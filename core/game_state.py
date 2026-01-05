@@ -27,11 +27,14 @@ class GameState(IEventListener):
         self.ruleset_factory = RulesetFactory(self)
         self.ruleset: Optional[AbstractRuleset] = None
 
+        # Initialize economics manager
+        from core.economics_manager import EconomicsManager
+        self.economics_manager = EconomicsManager(self)
+        
         # Placeholder managers (to be implemented later)
         self.move_zone_manager = None
         self.readiness_manager = None
         self.construction_manager = None
-        self.economics_manager = None
         self.death_manager = None
         self.city_manager = None
         self.diplomacy_manager = None

@@ -272,18 +272,27 @@ class GameStateDecoder:
             except (ValueError, IndexError):
                 continue
         
-        # Update provinces based on their first hex
+        # Update provinces by finding any hex in the province that matches the level code
+        # (The level code specifies a coordinate, but it might not be the first hex in the province)
         for province in game_state.provinces_manager.provinces:
             hexes = province.get_hexes()
             if not hexes:
                 continue
-            first_hex = hexes[0]
-            key = (first_hex.coordinate1, first_hex.coordinate2)
-            if key in province_data_map:
-                data = province_data_map[key]
-                province.set_id(data["id"])
-                province.set_money(data["money"])
-                province.set_city_name(data["city_name"])
+            
+            # Try to find a matching hex coordinate in this province
+            matched_data = None
+            for hex in hexes:
+                key = (hex.coordinate1, hex.coordinate2)
+                if key in province_data_map:
+                    matched_data = province_data_map[key]
+                    # Remove from map so we don't match it again
+                    del province_data_map[key]
+                    break
+            
+            if matched_data:
+                province.set_id(matched_data["id"])
+                province.set_money(matched_data["money"])
+                province.set_city_name(matched_data["city_name"])
 
     def _decode_rules(self, game_state: GameState, level_code: str) -> None:
         """Decode rules section."""

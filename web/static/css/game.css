@@ -343,6 +343,23 @@
     transform: scale(1.1);
 }
 
+.build-item-inline.unaffordable {
+    opacity: 0.4;
+    filter: grayscale(100%);
+    cursor: not-allowed;
+}
+
+.build-item-inline.unaffordable:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.2);
+    transform: scale(1.0);
+}
+
+.build-item-inline.unaffordable .build-item-cost {
+    color: #F44336;
+    text-decoration: line-through;
+}
+
 .build-item-inline .build-item-icon {
     width: 32px;
     height: 32px;

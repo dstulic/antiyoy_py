@@ -159,7 +159,7 @@ def api_game_init(level_index):
         
         # Initialize starting money for all provinces (default is 10 if not set)
         # This matches the Java version's prepareStartingMoney() behavior
-        from core.enums import EventType
+        from core.enums import EventType, PieceType
         for province in game_state.provinces_manager.provinces:
             # Only set money if it's 0 (not already set from level code)
             if province.get_money() == 0:
@@ -324,17 +324,30 @@ def api_game_province(coordinate1, coordinate2):
             'city_name': ''
         })
     
-    # Calculate income and consumption
-    income = 0
-    consumption = 0
+    # Calculate income, consumption, and profit using economics manager
+    if game_state.economics_manager:
+        income = game_state.economics_manager.calculate_province_income(province)
+        consumption = game_state.economics_manager.calculate_province_consumption(province)
+        profit = game_state.economics_manager.calculate_province_profit(province)
+    else:
+        # Fallback if economics manager not available
+        income = 0
+        consumption = 0
+        profit = 0
     
+    # Calculate piece costs for build menu
+    piece_costs = {}
     if game_state.ruleset:
-        for hex in province.get_hexes():
-            if hex.piece:
-                income += game_state.ruleset.get_hex_income(hex.piece)
-                consumption += game_state.ruleset.get_consumption(hex.piece)
-    
-    profit = income - consumption
+        from core.enums import PieceType
+        piece_costs = {
+            'peasant': game_state.ruleset.get_price(province, PieceType.PEASANT),
+            'spearman': game_state.ruleset.get_price(province, PieceType.SPEARMAN),
+            'baron': game_state.ruleset.get_price(province, PieceType.BARON),
+            'knight': game_state.ruleset.get_price(province, PieceType.KNIGHT),
+            'tower': game_state.ruleset.get_price(province, PieceType.TOWER),
+            'strong_tower': game_state.ruleset.get_price(province, PieceType.STRONG_TOWER),
+            'farm': game_state.ruleset.get_price(province, PieceType.FARM),
+        }
     
     return jsonify({
         'success': True,
@@ -343,7 +356,8 @@ def api_game_province(coordinate1, coordinate2):
         'income': income,
         'consumption': consumption,
         'profit': profit,
-        'city_name': province.get_city_name()
+        'city_name': province.get_city_name(),
+        'piece_costs': piece_costs
     })
 
 

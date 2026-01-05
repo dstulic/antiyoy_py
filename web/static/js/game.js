@@ -256,28 +256,72 @@ function populateBuildMenu(hex) {
     
     buildMenu.innerHTML = '';
     
-    // Create all build items in order: Farms, Towers, Units
-    const items = [
-        { type: 'farm0', name: 'Farm', cost: pieceCosts['farm0'] },
-        { type: 'tower', name: 'Tower', cost: pieceCosts['tower'] },
-        { type: 'strong_tower', name: 'Strong Tower', cost: pieceCosts['strong_tower'] },
-        { type: 'peasant', name: 'Peasant', cost: pieceCosts['peasant'] },
-        { type: 'spearman', name: 'Spearman', cost: pieceCosts['spearman'] },
-        { type: 'baron', name: 'Baron', cost: pieceCosts['baron'] },
-        { type: 'knight', name: 'Knight', cost: pieceCosts['knight'] }
-    ];
-    
-    items.forEach(itemData => {
-        const buildItem = createBuildItemInline(itemData.type, itemData.name, itemData.cost);
-        buildMenu.appendChild(buildItem);
-    });
+    // Fetch province data to get current money
+    fetch(`/api/game/province/${hex.coordinate1}/${hex.coordinate2}`)
+        .then(response => response.json())
+        .then(data => {
+            if (!data.success) {
+                console.error('Failed to fetch province data for build menu');
+                return;
+            }
+            
+            const provinceMoney = data.money || 0;
+            
+            // Create all build items in order: Farms, Towers, Units
+            const items = [
+                { type: 'farm0', name: 'Farm', cost: pieceCosts['farm0'] },
+                { type: 'tower', name: 'Tower', cost: pieceCosts['tower'] },
+                { type: 'strong_tower', name: 'Strong Tower', cost: pieceCosts['strong_tower'] },
+                { type: 'peasant', name: 'Peasant', cost: pieceCosts['peasant'] },
+                { type: 'spearman', name: 'Spearman', cost: pieceCosts['spearman'] },
+                { type: 'baron', name: 'Baron', cost: pieceCosts['baron'] },
+                { type: 'knight', name: 'Knight', cost: pieceCosts['knight'] }
+            ];
+            
+            items.forEach(itemData => {
+                const canAfford = provinceMoney >= itemData.cost;
+                const buildItem = createBuildItemInline(itemData.type, itemData.name, itemData.cost, canAfford);
+                buildMenu.appendChild(buildItem);
+            });
+        })
+        .catch(error => {
+            console.error('Error fetching province data for build menu:', error);
+            // Still show items, but without affordability check
+            const items = [
+                { type: 'farm0', name: 'Farm', cost: pieceCosts['farm0'] },
+                { type: 'tower', name: 'Tower', cost: pieceCosts['tower'] },
+                { type: 'strong_tower', name: 'Strong Tower', cost: pieceCosts['strong_tower'] },
+                { type: 'peasant', name: 'Peasant', cost: pieceCosts['peasant'] },
+                { type: 'spearman', name: 'Spearman', cost: pieceCosts['spearman'] },
+                { type: 'baron', name: 'Baron', cost: pieceCosts['baron'] },
+                { type: 'knight', name: 'Knight', cost: pieceCosts['knight'] }
+            ];
+            
+            items.forEach(itemData => {
+                const buildItem = createBuildItemInline(itemData.type, itemData.name, itemData.cost, true);
+                buildMenu.appendChild(buildItem);
+            });
+        });
 }
 
-function createBuildItemInline(pieceType, displayName, cost) {
+function createBuildItemInline(pieceType, displayName, cost, canAfford = true) {
     const item = document.createElement('div');
     item.className = 'build-item-inline';
+    if (!canAfford) {
+        item.classList.add('unaffordable');
+    }
     item.setAttribute('data-name', displayName);
-    item.onclick = () => handleBuildPiece(pieceType);
+    
+    // Only allow clicking if affordable
+    if (canAfford) {
+        item.onclick = () => handleBuildPiece(pieceType);
+    } else {
+        item.onclick = () => {
+            // Show feedback that item is unaffordable
+            console.log(`Cannot afford ${displayName} (cost: ${cost})`);
+        };
+        item.style.cursor = 'not-allowed';
+    }
     
     const icon = document.createElement('div');
     icon.className = 'build-item-icon';
@@ -297,6 +341,9 @@ function createBuildItemInline(pieceType, displayName, cost) {
     
     const costEl = document.createElement('div');
     costEl.className = 'build-item-cost';
+    if (!canAfford) {
+        costEl.classList.add('unaffordable-cost');
+    }
     costEl.textContent = cost;
     
     item.appendChild(icon);
