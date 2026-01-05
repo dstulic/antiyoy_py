@@ -54,6 +54,10 @@ def dump_level(level_index: int):
     if game_state.ruleset:
         print(f"\nRuleset: {game_state.ruleset.get_rules_type().value} v{game_state.ruleset.get_version_code()}")
     
+    if game_state.fog_of_war_manager:
+        fog_enabled = game_state.fog_of_war_manager.enabled
+        print(f"Fog of War: {'Enabled' if fog_enabled else 'Disabled'}")
+    
     if game_state.turns_manager:
         current_color = getattr(game_state.turns_manager, 'current_color', None)
         if not current_color:

@@ -329,10 +329,12 @@ class GameStateDecoder:
     def _decode_fog(self, game_state: GameState, level_code: str) -> None:
         """Decode fog of war section."""
         source = get_section(level_code, SECTION_FOG)
-        if source:
-            # Placeholder - fog of war manager not yet implemented
-            # Would set: game_state.fog_of_war_manager.enabled = (source == "true")
-            pass
+        if source and game_state.fog_of_war_manager:
+            # Enable fog of war if level code specifies it
+            # Handle "true," or "true" format
+            source_clean = source.strip().rstrip(',').lower()
+            enabled = (source_clean == "true")
+            game_state.fog_of_war_manager.set_enabled(enabled)
     
     def _decode_campaign_level_index(self, level_code: str) -> int:
         """Decode campaign level index."""

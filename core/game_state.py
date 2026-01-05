@@ -31,6 +31,10 @@ class GameState(IEventListener):
         from core.economics_manager import EconomicsManager
         self.economics_manager = EconomicsManager(self)
         
+        # Initialize fog of war manager
+        from core.fog_of_war import FogOfWarManager
+        self.fog_of_war_manager = FogOfWarManager(self)
+        
         # Placeholder managers (to be implemented later)
         self.move_zone_manager = None
         self.readiness_manager = None
@@ -39,7 +43,6 @@ class GameState(IEventListener):
         self.city_manager = None
         self.diplomacy_manager = None
         self.letters_manager = None
-        self.fog_of_war_manager = None
 
     def get_hex(self, coordinate1: int, coordinate2: int) -> Optional[Hex]:
         """Get hex by coordinates."""
@@ -165,3 +168,52 @@ class GameState(IEventListener):
         if self.ruleset:
             return f"def {self.ruleset.get_version_code()}"
         return "def 1"
+    
+    def get_hexes_for_player(self, player_color: Optional[HColor] = None) -> List[Hex]:
+        """
+        Get hexes visible to a specific player, respecting fog of war.
+        
+        Args:
+            player_color: The color of the player. If None, uses current player's color.
+                         If fog of war is disabled, returns all hexes.
+        
+        Returns:
+            List of hexes visible to the player
+        """
+        # If fog of war is disabled, return all hexes
+        if not self.fog_of_war_manager or not self.fog_of_war_manager.enabled:
+            return self.hexes.copy()
+        
+        # Determine target color
+        target_color = player_color
+        if target_color is None:
+            # Use current player's color
+            if self.entities_manager:
+                current_entity = self.entities_manager.get_current_entity()
+                if current_entity:
+                    target_color = current_entity.color
+                else:
+                    # No current entity, return all hexes
+                    return self.hexes.copy()
+            else:
+                # No entities manager, return all hexes
+                return self.hexes.copy()
+        
+        # Update fog of war for this player
+        # Temporarily override target color update to use the specified player
+        original_target = self.fog_of_war_manager.target_color
+        original_update_method = self.fog_of_war_manager._update_target_color
+        
+        # Override _update_target_color to use our target
+        def override_update_target():
+            self.fog_of_war_manager.target_color = target_color
+        
+        self.fog_of_war_manager._update_target_color = override_update_target
+        self.fog_of_war_manager.apply_update()
+        
+        # Restore original method and target
+        self.fog_of_war_manager._update_target_color = original_update_method
+        self.fog_of_war_manager.target_color = original_target
+        
+        # Return visible hexes
+        return self.fog_of_war_manager.currently_visible_hexes.copy()

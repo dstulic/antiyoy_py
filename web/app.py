@@ -169,6 +169,10 @@ def api_game_init(level_index):
                     event.money = 10
                     game_state.events_manager.apply_event(event)
         
+        # Update fog of war after initialization
+        if game_state.fog_of_war_manager and game_state.fog_of_war_manager.enabled:
+            game_state.fog_of_war_manager.apply_update()
+        
         # Create game manager
         game_manager = GameManager(game_state, GameMode.CAMPAIGN)
         
@@ -232,20 +236,28 @@ def api_game_state():
     if not hasattr(game_state, 'hexes'):
         return jsonify({'error': 'Invalid game state structure'}), 500
     
-    # Serialize hexes for rendering
-    # For web interface, disable fog of war so all provinces are visible
+    # Get current player color for fog of war
+    current_player_color = None
+    if hasattr(game_state, 'entities_manager') and game_state.entities_manager:
+        current_entity = game_state.entities_manager.get_current_entity()
+        if current_entity:
+            current_player_color = current_entity.color
+    
+    # Get visible hexes for the current player (respects fog of war)
+    # Only send hexes that are visible - fogged hexes are not sent to the client
+    visible_hexes = game_state.get_hexes_for_player(current_player_color)
+    
+    # Serialize only visible hexes for rendering
     hexes = []
-    if game_state.hexes:
-        for hex in game_state.hexes:
-            hex_data = {
-                'coordinate1': hex.coordinate1,
-                'coordinate2': hex.coordinate2,
-                'color': hex.color.value if hasattr(hex.color, 'value') else str(hex.color),
-                'piece': hex.piece.value if hex.piece and hasattr(hex.piece, 'value') else None,
-                'unit_id': hex.unit_id,
-                'fog': False  # Disable fog of war for web interface - show all provinces
-            }
-            hexes.append(hex_data)
+    for hex in visible_hexes:
+        hex_data = {
+            'coordinate1': hex.coordinate1,
+            'coordinate2': hex.coordinate2,
+            'color': hex.color.value if hasattr(hex.color, 'value') else str(hex.color),
+            'piece': hex.piece.value if hex.piece and hasattr(hex.piece, 'value') else None,
+            'unit_id': hex.unit_id
+        }
+        hexes.append(hex_data)
     
     # Serialize player entities
     entities = []
@@ -259,12 +271,10 @@ def api_game_state():
                 }
                 entities.append(entity_data)
     
-    # Get current turn info
-    current_color = None
-    if hasattr(game_state, 'entities_manager') and game_state.entities_manager:
-        current_entity = game_state.entities_manager.get_current_entity()
-        if current_entity and hasattr(current_entity, 'color'):
-            current_color = current_entity.color.value if hasattr(current_entity.color, 'value') else str(current_entity.color)
+    # Get current turn info (convert to string value for JSON)
+    current_color_value = None
+    if current_player_color:
+        current_color_value = current_player_color.value if hasattr(current_player_color, 'value') else str(current_player_color)
     
     # Get turn info
     turn_index = 0
@@ -277,7 +287,7 @@ def api_game_state():
         'success': True,
         'hexes': hexes,
         'entities': entities,
-        'current_color': current_color,
+        'current_color': current_color_value,
         'turn_index': game_state.turns_manager.turn_index if game_state.turns_manager else 0,
         'lap': game_state.turns_manager.lap if game_state.turns_manager else 0
     })
@@ -306,10 +316,44 @@ def api_game_province(coordinate1, coordinate2):
     if game_state is None:
         return jsonify({'error': 'Game state not available'}), 500
     
+    # Get current player color for fog of war
+    current_player_color = None
+    if hasattr(game_state, 'entities_manager') and game_state.entities_manager:
+        current_entity = game_state.entities_manager.get_current_entity()
+        if current_entity:
+            current_player_color = current_entity.color
+    
+    # Update fog of war if enabled
+    if (game_state.fog_of_war_manager and 
+        game_state.fog_of_war_manager.enabled and 
+        current_player_color):
+        game_state.fog_of_war_manager.target_color = current_player_color
+        game_state.fog_of_war_manager.apply_update()
+    
     # Find the hex
     hex_obj = game_state.get_hex(coord1, coord2)
     if not hex_obj:
         return jsonify({'error': 'Hex not found'}), 404
+    
+    # Check if hex is visible (not in fog)
+    is_visible = True
+    if (game_state.fog_of_war_manager and 
+        game_state.fog_of_war_manager.enabled):
+        is_visible = not hasattr(hex_obj, 'fog') or not hex_obj.fog
+    
+    # If hex is in fog, return limited information
+    if not is_visible:
+        return jsonify({
+            'success': True,
+            'province_id': None,
+            'money': 0,
+            'income': 0,
+            'consumption': 0,
+            'profit': 0,
+            'city_name': '',
+            'piece_costs': {},
+            'fog': True
+        })
     
     # Get the province for this hex
     province = hex_obj.get_province()

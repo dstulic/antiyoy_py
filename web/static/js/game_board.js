@@ -163,10 +163,10 @@ class GameBoard {
         }
         
         // Draw hex background (color)
-        this.drawHexShape(x, y, hex.color, hex.fog);
+        this.drawHexShape(x, y, hex.color);
         
         // Draw piece if present
-        if (hex.piece && !hex.fog) {
+        if (hex.piece) {
             this.drawPiece(x, y, hex.piece);
         }
         
@@ -178,16 +178,11 @@ class GameBoard {
         }
     }
     
-    drawHexShape(x, y, color, fog = false) {
+    drawHexShape(x, y, color) {
         const ctx = this.ctx;
         const radius = this.hexSize * this.scale;
         
         ctx.save();
-        
-        // Set opacity for fog
-        if (fog) {
-            ctx.globalAlpha = 0.3;
-        }
         
         // Draw hexagon (pointy-top orientation)
         // Start at top point (angle -π/2) for pointy-top hex
@@ -397,6 +392,7 @@ class GameBoard {
             // If currentPlayerColor is not set, allow selection (for backwards compatibility)
             if (this.currentPlayerColor && hex.color !== this.currentPlayerColor) {
                 // Clicked on non-player-owned tile - hide status and actions
+                closeBuildMenu();
                 hideProvinceStatus();
                 return;
             }
@@ -418,6 +414,7 @@ class GameBoard {
             }
         } else {
             // Clicked on empty space - hide status and actions
+            closeBuildMenu();
             hideProvinceStatus();
         }
     }
