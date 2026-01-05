@@ -130,6 +130,10 @@ function loadGameState() {
         .then(data => {
             if (data.success && data.hexes) {
                 gameBoard.setHexes(data.hexes);
+                // Set current player color for selection filtering
+                if (data.current_color) {
+                    gameBoard.setCurrentPlayerColor(data.current_color);
+                }
             } else {
                 console.error('Failed to load game state:', data);
             }
@@ -156,10 +160,230 @@ function stopGameStatePolling() {
     }
 }
 
-// Close menu when clicking overlay
+// Close menu when clicking outside
 document.addEventListener('DOMContentLoaded', function() {
     const menuOverlay = document.getElementById('menuOverlay');
+    const menuPanel = document.getElementById('menuPanel');
+    const hamburgerBtn = document.getElementById('hamburgerBtn');
+    
+    // Close menu when clicking on overlay
     if (menuOverlay) {
-        menuOverlay.addEventListener('click', toggleMenu);
+        menuOverlay.addEventListener('click', function(e) {
+            // Only close if clicking directly on overlay, not on menu panel
+            if (e.target === menuOverlay) {
+                toggleMenu();
+            }
+        });
+    }
+    
+    // Close menu when clicking outside menu panel and hamburger button
+    document.addEventListener('click', function(e) {
+        if (menuPanel && menuPanel.classList.contains('active')) {
+            // Check if click is outside both menu panel and hamburger button
+            const clickedOutsideMenu = !menuPanel.contains(e.target);
+            const clickedOutsideHamburger = !hamburgerBtn.contains(e.target);
+            
+            if (clickedOutsideMenu && clickedOutsideHamburger) {
+                // Don't close if clicking on build menu
+                const buildMenu = document.getElementById('buildMenu');
+                if (buildMenu && buildMenu.contains(e.target)) {
+                    return;
+                }
+                toggleMenu();
+            }
+        }
+    });
+    
+    // Prevent clicks inside menu panel from closing the menu
+    if (menuPanel) {
+        menuPanel.addEventListener('click', function(e) {
+            e.stopPropagation();
+        });
     }
 });
+
+// Build Menu Functions
+function showBuildMenu(hex) {
+    const buildMenu = document.getElementById('buildMenu');
+    const actionsBar = document.getElementById('actionsBar');
+    if (!buildMenu || !actionsBar) return;
+    
+    // Populate menu with pieces and costs
+    populateBuildMenu(hex);
+    
+    // Show actions bar
+    actionsBar.style.display = 'flex';
+}
+
+function closeBuildMenu() {
+    const actionsBar = document.getElementById('actionsBar');
+    if (actionsBar) {
+        actionsBar.style.display = 'none';
+    }
+    if (gameBoard) {
+        gameBoard.selectedHexForBuild = null;
+    }
+}
+
+// Action button functions
+function undoAction() {
+    console.log('Undo action');
+    // TODO: Implement undo functionality
+}
+
+function endTurn() {
+    console.log('End turn');
+    // TODO: Implement end turn functionality
+}
+
+function populateBuildMenu(hex) {
+    // Define piece costs (base costs - farm cost varies by province)
+    const pieceCosts = {
+        'farm0': 12,  // Base cost, will increase with more farms
+        'farm1': 12,
+        'farm2': 12,
+        'tower': 15,
+        'strong_tower': 35,
+        'peasant': 10,
+        'spearman': 20,
+        'baron': 30,
+        'knight': 40
+    };
+    
+    // Clear existing items
+    const buildMenu = document.getElementById('buildMenu');
+    if (!buildMenu) return;
+    
+    buildMenu.innerHTML = '';
+    
+    // Create all build items in order: Farms, Towers, Units
+    const items = [
+        { type: 'farm0', name: 'Farm', cost: pieceCosts['farm0'] },
+        { type: 'tower', name: 'Tower', cost: pieceCosts['tower'] },
+        { type: 'strong_tower', name: 'Strong Tower', cost: pieceCosts['strong_tower'] },
+        { type: 'peasant', name: 'Peasant', cost: pieceCosts['peasant'] },
+        { type: 'spearman', name: 'Spearman', cost: pieceCosts['spearman'] },
+        { type: 'baron', name: 'Baron', cost: pieceCosts['baron'] },
+        { type: 'knight', name: 'Knight', cost: pieceCosts['knight'] }
+    ];
+    
+    items.forEach(itemData => {
+        const buildItem = createBuildItemInline(itemData.type, itemData.name, itemData.cost);
+        buildMenu.appendChild(buildItem);
+    });
+}
+
+function createBuildItemInline(pieceType, displayName, cost) {
+    const item = document.createElement('div');
+    item.className = 'build-item-inline';
+    item.setAttribute('data-name', displayName);
+    item.onclick = () => handleBuildPiece(pieceType);
+    
+    const icon = document.createElement('div');
+    icon.className = 'build-item-icon';
+    
+    const img = document.createElement('img');
+    const imageName = getPieceImage(pieceType);
+    if (imageName) {
+        img.src = `/static/assets/original_game_assets/atlas/${imageName}`;
+        img.alt = displayName;
+    } else {
+        // Fallback if image not found
+        icon.textContent = '?';
+        icon.style.color = 'white';
+        icon.style.fontSize = '1.5em';
+    }
+    icon.appendChild(img);
+    
+    const costEl = document.createElement('div');
+    costEl.className = 'build-item-cost';
+    costEl.textContent = cost;
+    
+    item.appendChild(icon);
+    item.appendChild(costEl);
+    
+    return item;
+}
+
+function handleBuildPiece(pieceType) {
+    if (!gameBoard || !gameBoard.selectedHexForBuild) {
+        console.warn('No hex selected for building');
+        return;
+    }
+    
+    const hex = gameBoard.selectedHexForBuild;
+    console.log('Building', pieceType, 'on hex', hex);
+    
+    // TODO: Send build command to backend
+    // For now, just close the menu
+    closeBuildMenu();
+}
+
+// Province Status Functions
+function updateProvinceStatus(hex) {
+    if (!hex || hex.coordinate1 === undefined || hex.coordinate2 === undefined) {
+        hideProvinceStatus();
+        return;
+    }
+    
+    fetch(`/api/game/province/${hex.coordinate1}/${hex.coordinate2}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                const statusBar = document.getElementById('statusBar');
+                const statusFunds = document.getElementById('statusFunds');
+                const statusProfit = document.getElementById('statusProfit');
+                const statusCityName = document.getElementById('statusCityName');
+                
+                if (statusBar && statusFunds && statusProfit && statusCityName) {
+                    // Update funds
+                    statusFunds.textContent = data.money || 0;
+                    
+                    // Update profit (income - consumption)
+                    const profit = data.profit || 0;
+                    statusProfit.textContent = profit >= 0 ? `+${profit}` : `${profit}`;
+                    statusProfit.className = 'status-value ' + (profit >= 0 ? 'positive' : 'negative');
+                    
+                    // Update city name (if available)
+                    if (data.city_name) {
+                        statusCityName.textContent = data.city_name;
+                        statusCityName.style.display = 'block';
+                    } else {
+                        statusCityName.style.display = 'none';
+                    }
+                    
+                    // Status bar is always visible, just update content
+                }
+            } else {
+                hideProvinceStatus();
+            }
+        })
+        .catch(error => {
+            console.error('Error loading province status:', error);
+            hideProvinceStatus();
+        });
+}
+
+function hideProvinceStatus() {
+    const statusBar = document.getElementById('statusBar');
+    const actionsBar = document.getElementById('actionsBar');
+    const statusFunds = document.getElementById('statusFunds');
+    const statusProfit = document.getElementById('statusProfit');
+    const statusCityName = document.getElementById('statusCityName');
+    
+    // Clear status bar values (but keep it visible)
+    if (statusFunds) statusFunds.textContent = '0';
+    if (statusProfit) {
+        statusProfit.textContent = '0';
+        statusProfit.className = 'status-value';
+    }
+    if (statusCityName) {
+        statusCityName.textContent = '';
+        statusCityName.style.display = 'none';
+    }
+    
+    // Hide actions bar
+    if (actionsBar) {
+        actionsBar.style.display = 'none';
+    }
+}

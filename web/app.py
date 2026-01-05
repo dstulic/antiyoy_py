@@ -157,6 +157,18 @@ def api_game_init(level_index):
                 'error': f'Failed to decode game state for level {level_index}. The level code may be corrupted or incomplete.'
             }), 500
         
+        # Initialize starting money for all provinces (default is 10 if not set)
+        # This matches the Java version's prepareStartingMoney() behavior
+        from core.enums import EventType
+        for province in game_state.provinces_manager.provinces:
+            # Only set money if it's 0 (not already set from level code)
+            if province.get_money() == 0:
+                event = game_state.events_manager.factory.create_event(EventType.SET_MONEY)
+                if event:
+                    event.province_id = province.get_id()
+                    event.money = 10
+                    game_state.events_manager.apply_event(event)
+        
         # Create game manager
         game_manager = GameManager(game_state, GameMode.CAMPAIGN)
         
@@ -221,6 +233,7 @@ def api_game_state():
         return jsonify({'error': 'Invalid game state structure'}), 500
     
     # Serialize hexes for rendering
+    # For web interface, disable fog of war so all provinces are visible
     hexes = []
     if game_state.hexes:
         for hex in game_state.hexes:
@@ -230,7 +243,7 @@ def api_game_state():
                 'color': hex.color.value if hasattr(hex.color, 'value') else str(hex.color),
                 'piece': hex.piece.value if hex.piece and hasattr(hex.piece, 'value') else None,
                 'unit_id': hex.unit_id,
-                'fog': getattr(hex, 'fog', False)
+                'fog': False  # Disable fog of war for web interface - show all provinces
             }
             hexes.append(hex_data)
     
@@ -267,6 +280,70 @@ def api_game_state():
         'current_color': current_color,
         'turn_index': game_state.turns_manager.turn_index if game_state.turns_manager else 0,
         'lap': game_state.turns_manager.lap if game_state.turns_manager else 0
+    })
+
+
+@app.route('/api/game/province/<coordinate1>/<coordinate2>')
+def api_game_province(coordinate1, coordinate2):
+    """Get province information for a specific hex."""
+    try:
+        # Convert string coordinates to integers (handles negative numbers)
+        coord1 = int(coordinate1)
+        coord2 = int(coordinate2)
+    except ValueError:
+        return jsonify({'error': 'Invalid coordinates'}), 400
+    
+    session_id = session.get('session_id')
+    if not session_id or session_id not in game_sessions:
+        return jsonify({'error': 'No active game session'}), 404
+    
+    # Mark session as recently used (move to end)
+    game_sessions.move_to_end(session_id)
+    
+    session_data = game_sessions[session_id]
+    game_state = session_data.get('game_state')
+    
+    if game_state is None:
+        return jsonify({'error': 'Game state not available'}), 500
+    
+    # Find the hex
+    hex_obj = game_state.get_hex(coord1, coord2)
+    if not hex_obj:
+        return jsonify({'error': 'Hex not found'}), 404
+    
+    # Get the province for this hex
+    province = hex_obj.get_province()
+    if not province:
+        return jsonify({
+            'success': True,
+            'province_id': None,
+            'money': 0,
+            'income': 0,
+            'consumption': 0,
+            'profit': 0,
+            'city_name': ''
+        })
+    
+    # Calculate income and consumption
+    income = 0
+    consumption = 0
+    
+    if game_state.ruleset:
+        for hex in province.get_hexes():
+            if hex.piece:
+                income += game_state.ruleset.get_hex_income(hex.piece)
+                consumption += game_state.ruleset.get_consumption(hex.piece)
+    
+    profit = income - consumption
+    
+    return jsonify({
+        'success': True,
+        'province_id': province.get_id(),
+        'money': province.get_money(),
+        'income': income,
+        'consumption': consumption,
+        'profit': profit,
+        'city_name': province.get_city_name()
     })
 
 

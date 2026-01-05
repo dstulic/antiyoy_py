@@ -13,6 +13,8 @@ class GameBoard {
         this.scale = 1.0;
         this.selectedHex = null;
         this.pieceImages = {}; // Cache for piece images
+        this.currentPlayerColor = null; // Current player's color (for selection filtering)
+        this.selectedHexForBuild = null; // Hex selected for building menu
         
         // Pan and zoom state
         this.isPanning = false;
@@ -31,12 +33,30 @@ class GameBoard {
         const pieces = ['peasant', 'spearman', 'baron', 'knight', 'tower', 'strong_tower', 'city', 
                        'farm0', 'farm1', 'farm2', 'grave', 'palm', 'pine'];
         
+        let loadedCount = 0;
+        const totalImages = pieces.length;
+        
         pieces.forEach(piece => {
             const imageName = getPieceImage(piece);
             if (imageName) {
                 const img = new Image();
-                img.src = `/static/assets/atlas/${imageName}`;
+                // When image loads, trigger a re-render if we have hexes to display
+                img.onload = () => {
+                    loadedCount++;
+                    // Re-render when images finish loading (if we have hexes to display)
+                    if (this.hexes.length > 0) {
+                        this.render();
+                    }
+                };
+                img.onerror = () => {
+                    console.warn(`Failed to load image: ${imageName}`);
+                    loadedCount++;
+                };
+                img.src = `/static/assets/original_game_assets/atlas/${imageName}`;
                 this.pieceImages[piece] = img;
+            } else {
+                // If no image name, count it as "loaded" (nothing to load)
+                loadedCount++;
             }
         });
     }
@@ -84,6 +104,10 @@ class GameBoard {
         this.hexes = hexes;
         this.centerView();
         this.render();
+    }
+    
+    setCurrentPlayerColor(color) {
+        this.currentPlayerColor = color;
     }
     
     centerView() {
@@ -202,12 +226,19 @@ class GameBoard {
             'blue': '#2196F3',
             'yellow': '#FFEB3B',
             'cyan': '#00BCD4',
+            'aqua': '#00FFFF',
             'white': '#FFFFFF',
             'orange': '#FF9800',
             'purple': '#9C27B0',
             'rose': '#E91E63',
             'mint': '#4CAF50',
-            'ice': '#B3E5FC'
+            'ice': '#B3E5FC',
+            'brown': '#8D6E63',
+            'lavender': '#B39DDB',
+            'brass': '#CD7F32',
+            'algae': '#64B5F6',
+            'orchid': '#BA68C8',
+            'whiskey': '#D2691E'
         };
         return colors[colorName] || '#808080';
     }
@@ -253,55 +284,6 @@ class GameBoard {
         ctx.stroke();
         
         ctx.restore();
-    }
-    
-    handleClick(e) {
-        // Middle mouse button click to recenter
-        if (e.button === 1) {
-            e.preventDefault();
-            const rect = this.canvas.getBoundingClientRect();
-            const x = e.clientX - rect.left;
-            const y = e.clientY - rect.top;
-            
-            // Convert click position to world coordinates
-            const worldX = (x - this.offsetX) / this.scale;
-            const worldY = (y - this.offsetY) / this.scale;
-            
-            // Recenter view on this position
-            this.offsetX = this.canvas.width / 2 - worldX * this.scale;
-            this.offsetY = this.canvas.height / 2 - worldY * this.scale;
-            
-            this.render();
-            return;
-        }
-        
-        // Left click for hex selection (existing behavior)
-        const rect = this.canvas.getBoundingClientRect();
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
-        
-        // Convert to hex coordinates (account for offset, zoom, and spacing)
-        const worldX = (x - this.offsetX) / this.scale;
-        const worldY = (y - this.offsetY) / this.scale;
-        const effectiveHexSize = this.hexSize * this.spacingMultiplier;
-        const hexCoords = pixelToHex(worldX, worldY, effectiveHexSize);
-        
-        // Find hex
-        const hex = this.hexes.find(h => 
-            h.coordinate1 === hexCoords.q && 
-            h.coordinate2 === hexCoords.r
-        );
-        
-        if (hex) {
-            this.selectedHex = hex;
-            this.render();
-            console.log('Selected hex:', hex);
-            
-            // Emit event or call callback
-            if (this.onHexClick) {
-                this.onHexClick(hex);
-            }
-        }
     }
     
     handleMouseMove(e) {
@@ -411,14 +393,32 @@ class GameBoard {
         );
         
         if (hex) {
+            // Only select hexes owned by the current player
+            // If currentPlayerColor is not set, allow selection (for backwards compatibility)
+            if (this.currentPlayerColor && hex.color !== this.currentPlayerColor) {
+                // Clicked on non-player-owned tile - hide status and actions
+                hideProvinceStatus();
+                return;
+            }
+            
             this.selectedHex = hex;
+            this.selectedHexForBuild = hex;
             this.render();
             console.log('Selected hex:', hex);
+            
+            // Update status bar with province information
+            updateProvinceStatus(hex);
+            
+            // Show build menu for user-owned tiles
+            showBuildMenu(hex);
             
             // Emit event or call callback
             if (this.onHexClick) {
                 this.onHexClick(hex);
             }
+        } else {
+            // Clicked on empty space - hide status and actions
+            hideProvinceStatus();
         }
     }
 }

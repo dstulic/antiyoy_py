@@ -64,12 +64,19 @@ function getColorName(colorValue) {
         'blue': 'blue',
         'yellow': 'yellow',
         'cyan': 'cyan',
+        'aqua': 'aqua',
         'white': 'white',
         'orange': 'orange',
         'purple': 'purple',
         'rose': 'rose',
         'mint': 'mint',
-        'ice': 'ice'
+        'ice': 'ice',
+        'brown': 'brown',
+        'lavender': 'lavender',
+        'brass': 'brass',
+        'algae': 'algae',
+        'orchid': 'orchid',
+        'whiskey': 'whiskey'
     };
     return colorMap[colorValue.toLowerCase()] || 'gray';
 }
