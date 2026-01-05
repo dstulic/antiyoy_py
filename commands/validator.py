@@ -100,30 +100,74 @@ class CommandValidator:
         if not command.hex:
             return False, "Hex required"
         
-        # Check hex belongs to player
-        if command.hex.color != player_color:
-            return False, "Hex does not belong to player"
-        
-        # Check hex is empty
-        if command.hex.has_piece():
-            return False, "Hex already has a piece"
-        
-        # Check ruleset allows building
         if not self.game_state.ruleset:
             return False, "No ruleset defined"
         
-        # Check if piece can be built on this hex
-        if not self.game_state.ruleset.is_buildable(command.hex, command.piece_type):
-            return False, f"Cannot build {command.piece_type.value} on this hex"
+        # Get province - for units, use province from province_hex if provided (for gray hexes)
+        # For static pieces, get province from the target hex
+        from core.core_utils import is_unit
+        province = None
         
-        # Check if player has enough money
-        province = self.game_state.provinces_manager.find_province_slowly(command.hex)
+        if is_unit(command.piece_type) and command.province_hex:
+            # For units: get province from the selected province hex (allows building on gray hexes)
+            province = command.province_hex.get_province()
+        
+        # If province not found yet, try to get it from target hex
         if not province:
-            return False, "Hex is not in a province"
+            province = command.hex.get_province()
+            if not province:
+                province = self.game_state.provinces_manager.find_province_slowly(command.hex)
         
-        price = self.game_state.ruleset.get_price(command.piece_type)
+        if not province:
+            return False, "Province not found"
+        
+        # Check if province belongs to current player
+        if province.get_color() != player_color:
+            return False, "Province does not belong to current player"
+        
+        # For static pieces, check that hex belongs to the province
+        # For units, hex can be gray (neutral) - it will be colored when unit is built
+        if not is_unit(command.piece_type):
+            if command.hex.color != province.get_color():
+                return False, "Hex does not belong to province"
+        
+        # Check if piece type is buildable
+        if not self.game_state.ruleset.is_buildable(command.piece_type):
+            return False, f"Piece type {command.piece_type.value} is not buildable"
+        
+        # Check if province can afford it
+        price = self.game_state.ruleset.get_price(province, command.piece_type)
         if province.get_money() < price:
-            return False, f"Not enough money (need {price}, have {province.get_money()})"
+            return False, f"Not enough money. Need {price}, have {province.get_money()}"
+        
+        # Check if hex is empty (for static pieces) or can accept unit
+        if is_unit(command.piece_type):
+            # For units: validate that hex is adjacent to province (allows building on gray hexes)
+            province_hexes = province.get_hexes()
+            is_adjacent = False
+            for p_hex in province_hexes:
+                if command.hex in p_hex.adjacent_hexes:
+                    is_adjacent = True
+                    break
+            
+            if not is_adjacent:
+                return False, "Unit can only be built on hexes adjacent to province"
+            
+            # For units, check if hex is empty, has tree/grave, or has mergeable unit
+            if command.hex.has_piece():
+                if command.hex.piece not in (PieceType.PINE, PieceType.PALM, PieceType.GRAVE):
+                    # Check if it's a mergeable unit (same color)
+                    if not (command.hex.has_unit() and command.hex.color == province.get_color()):
+                        return False, "Cannot build unit on this hex"
+        else:
+            # For static pieces (towers, farms), hex must be empty
+            # Exception: strong_tower can be built on tower
+            if command.piece_type == PieceType.STRONG_TOWER:
+                if command.hex.piece != PieceType.TOWER:
+                    return False, "Strong tower can only be built on existing tower"
+            else:
+                if not command.hex.is_empty():
+                    return False, "Hex must be empty to build this piece"
         
         return True, None
 

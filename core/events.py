@@ -435,10 +435,44 @@ class EventPieceBuild(AbstractEvent):
 
     def apply_change(self) -> None:
         """Apply piece build."""
-        if self.hex:
-            self.hex.set_piece(self.piece_type)
-            if is_unit(self.piece_type):
-                self.hex.set_unit_id(self.unit_id)
+        if not self.core_model or not self.hex or not self.piece_type:
+            return
+        
+        # Get province
+        province = None
+        if self.province_id != -1 and self.core_model.provinces_manager:
+            province = self.core_model.provinces_manager.get_province(self.province_id)
+        
+        if not province:
+            return
+        
+        # Calculate price before applying changes (price may change after)
+        price = 0
+        if self.core_model.ruleset:
+            price = self.core_model.ruleset.get_price(province, self.piece_type)
+        
+        # Handle tree reward (if cutting down a tree)
+        if self.hex.has_tree() and self.hex.color == province.get_color():
+            if self.core_model.ruleset:
+                reward = self.core_model.ruleset.get_tree_reward()
+                province.set_money(province.get_money() + reward)
+        
+        # Set piece on hex
+        self.hex.set_piece(self.piece_type)
+        
+        # For units, set unit ID and color
+        if is_unit(self.piece_type):
+            self.hex.set_unit_id(self.unit_id)
+            self.hex.set_color(province.get_color())
+            # TODO: Handle readiness manager when implemented
+            # if self.core_model.readiness_manager:
+            #     ready = (self.hex.is_empty() and 
+            #              self.hex.color == province.get_color() and 
+            #              self.core_model.ruleset.is_unit_ready_on_built())
+            #     self.core_model.readiness_manager.set_ready(self.hex, ready)
+        
+        # Deduct money from province
+        province.set_money(province.get_money() - price)
 
     def copy_from(self, src_event: AbstractEvent) -> None:
         """Copy from another event."""

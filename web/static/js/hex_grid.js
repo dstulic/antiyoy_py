@@ -95,6 +95,7 @@ function getPieceImage(pieceType) {
         'tower': 'tower.png',
         'strong_tower': 'strong_tower.png',
         'city': 'city.png',
+        'farm': 'farm0.png',  // Use farm0.png for farm piece type
         'farm0': 'farm0.png',
         'farm1': 'farm1.png',
         'farm2': 'farm2.png',

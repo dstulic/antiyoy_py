@@ -88,37 +88,69 @@ class CommandExecutor:
 
     def _execute_build_piece(self, command: BuildPieceCommand) -> tuple[bool, Optional[str]]:
         """Execute build piece command."""
-        events_factory = self.game_state.events_manager.factory
-        
-        # Get province
-        province = self.game_state.provinces_manager.find_province_slowly(command.hex)
-        if not province:
-            return False, "Hex is not in a province"
-        
-        # Get unit ID if it's a unit
-        unit_id = -1
         from core.core_utils import is_unit
-        if is_unit(command.piece_type):
-            unit_id = self.game_state.get_id_for_new_unit()
+        
+        # Get province - for units, use province from province_hex if provided (for gray hexes)
+        # For static pieces, get province from the target hex
+        province = None
+        
+        if is_unit(command.piece_type) and command.province_hex:
+            # For units: get province from the selected province hex (allows building on gray hexes)
+            province = command.province_hex.get_province()
+        
+        # If province not found yet, try to get it from target hex
+        if not province:
+            province = command.hex.get_province()
+            if not province:
+                province = self.game_state.provinces_manager.find_province_slowly(command.hex)
+        
+        if not province:
+            return False, "Province not found"
+        
+        # Get current entity for author
+        current_entity = self.game_state.entities_manager.get_current_entity()
+        if not current_entity:
+            return False, "No current player"
         
         # Create build event
+        events_factory = self.game_state.events_manager.factory
         event = events_factory.create_event(EventType.PIECE_BUILD)
-        if event:
-            from core.events import EventPieceBuild
-            if isinstance(event, EventPieceBuild):
-                event.set_hex(command.hex)
-                event.set_piece_type(command.piece_type)
-                event.set_unit_id(unit_id)
-                event.set_province_id(province.get_id())
+        if not event:
+            return False, "Failed to create build event"
+        
+        from core.events import EventPieceBuild
+        if isinstance(event, EventPieceBuild):
+            event.set_hex(command.hex)
+            event.set_piece_type(command.piece_type)
+            event.set_province_id(province.get_id())
+            
+            # For units, generate a new unit ID
+            if is_unit(command.piece_type):
+                event.set_unit_id(self.game_state.get_id_for_new_unit())
+            else:
+                event.unit_id = -1
+            
+            # Set author
+            event.set_author(current_entity)
+            
+            # Validate event
+            if not event.is_valid():
+                return False, "Build event is not valid"
+            
+            # Apply event
+            try:
                 self.game_state.events_manager.apply_event(event)
                 
-                # Deduct money
-                price = self.game_state.ruleset.get_price(command.piece_type)
-                province.set_money(province.get_money() - price)
+                # Update fog of war if enabled
+                if (self.game_state.fog_of_war_manager and 
+                    self.game_state.fog_of_war_manager.enabled):
+                    self.game_state.fog_of_war_manager.apply_update()
                 
                 return True, None
+            except Exception as e:
+                return False, f"Failed to apply build event: {str(e)}"
         
-        return False, "Failed to create build event"
+        return False, "Unexpected event type"
 
     def _execute_end_turn(self) -> tuple[bool, Optional[str]]:
         """Execute end turn command."""

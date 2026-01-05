@@ -32,12 +32,14 @@ class BuildPieceCommand(Command):
     hex: Hex
     piece_type: PieceType
     province_id: int = -1
+    province_hex: Optional[Hex] = None  # For units built on gray hexes
     
-    def __init__(self, hex: Hex, piece_type: PieceType, province_id: int = -1):
+    def __init__(self, hex: Hex, piece_type: PieceType, province_id: int = -1, province_hex: Optional[Hex] = None):
         super().__init__("build_piece")
         self.hex = hex
         self.piece_type = piece_type
         self.province_id = province_id
+        self.province_hex = province_hex
 
 
 @dataclass

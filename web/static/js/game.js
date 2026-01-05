@@ -104,6 +104,14 @@ window.addEventListener('beforeunload', () => {
     stopGameStatePolling();
 });
 
+// Handle escape key to cancel placement mode
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && gameBoard && gameBoard.placementMode) {
+        gameBoard.cancelPlacementMode();
+        closeBuildMenu();
+    }
+});
+
 function initializeGameBoard() {
     // Create game board container
     const gameBoardContainer = document.getElementById('gameBoard');
@@ -125,7 +133,7 @@ function initializeGameBoard() {
 }
 
 function loadGameState() {
-    fetch('/api/game/state')
+    return fetch('/api/game/state')
         .then(response => response.json())
         .then(data => {
             if (data.success && data.hexes) {
@@ -137,9 +145,11 @@ function loadGameState() {
             } else {
                 console.error('Failed to load game state:', data);
             }
+            return data;
         })
         .catch(error => {
             console.error('Error loading game state:', error);
+            throw error;
         });
 }
 
@@ -205,23 +215,26 @@ document.addEventListener('DOMContentLoaded', function() {
 // Build Menu Functions
 function showBuildMenu(hex) {
     const buildMenu = document.getElementById('buildMenu');
-    const actionsBar = document.getElementById('actionsBar');
-    if (!buildMenu || !actionsBar) return;
+    if (!buildMenu) return;
     
     // Populate menu with pieces and costs
     populateBuildMenu(hex);
     
-    // Show actions bar
-    actionsBar.style.display = 'flex';
+    // Show build menu (actions bar is always visible now)
+    buildMenu.style.display = 'flex';
 }
 
 function closeBuildMenu() {
-    const actionsBar = document.getElementById('actionsBar');
-    if (actionsBar) {
-        actionsBar.style.display = 'none';
+    const buildMenu = document.getElementById('buildMenu');
+    if (buildMenu) {
+        buildMenu.style.display = 'none';
     }
     if (gameBoard) {
         gameBoard.selectedHexForBuild = null;
+        // Cancel placement mode if active
+        if (gameBoard.placementMode) {
+            gameBoard.cancelPlacementMode();
+        }
     }
 }
 
@@ -237,19 +250,6 @@ function endTurn() {
 }
 
 function populateBuildMenu(hex) {
-    // Define piece costs (base costs - farm cost varies by province)
-    const pieceCosts = {
-        'farm0': 12,  // Base cost, will increase with more farms
-        'farm1': 12,
-        'farm2': 12,
-        'tower': 15,
-        'strong_tower': 35,
-        'peasant': 10,
-        'spearman': 20,
-        'baron': 30,
-        'knight': 40
-    };
-    
     // Clear existing items
     const buildMenu = document.getElementById('buildMenu');
     if (!buildMenu) return;
@@ -266,16 +266,17 @@ function populateBuildMenu(hex) {
             }
             
             const provinceMoney = data.money || 0;
+            const pieceCosts = data.piece_costs || {};
             
             // Create all build items in order: Farms, Towers, Units
             const items = [
-                { type: 'farm0', name: 'Farm', cost: pieceCosts['farm0'] },
-                { type: 'tower', name: 'Tower', cost: pieceCosts['tower'] },
-                { type: 'strong_tower', name: 'Strong Tower', cost: pieceCosts['strong_tower'] },
-                { type: 'peasant', name: 'Peasant', cost: pieceCosts['peasant'] },
-                { type: 'spearman', name: 'Spearman', cost: pieceCosts['spearman'] },
-                { type: 'baron', name: 'Baron', cost: pieceCosts['baron'] },
-                { type: 'knight', name: 'Knight', cost: pieceCosts['knight'] }
+                { type: 'farm', name: 'Farm', cost: pieceCosts['farm'] || 0 },
+                { type: 'tower', name: 'Tower', cost: pieceCosts['tower'] || 0 },
+                { type: 'strong_tower', name: 'Strong Tower', cost: pieceCosts['strong_tower'] || 0 },
+                { type: 'peasant', name: 'Peasant', cost: pieceCosts['peasant'] || 0 },
+                { type: 'spearman', name: 'Spearman', cost: pieceCosts['spearman'] || 0 },
+                { type: 'baron', name: 'Baron', cost: pieceCosts['baron'] || 0 },
+                { type: 'knight', name: 'Knight', cost: pieceCosts['knight'] || 0 }
             ];
             
             items.forEach(itemData => {
@@ -286,21 +287,7 @@ function populateBuildMenu(hex) {
         })
         .catch(error => {
             console.error('Error fetching province data for build menu:', error);
-            // Still show items, but without affordability check
-            const items = [
-                { type: 'farm0', name: 'Farm', cost: pieceCosts['farm0'] },
-                { type: 'tower', name: 'Tower', cost: pieceCosts['tower'] },
-                { type: 'strong_tower', name: 'Strong Tower', cost: pieceCosts['strong_tower'] },
-                { type: 'peasant', name: 'Peasant', cost: pieceCosts['peasant'] },
-                { type: 'spearman', name: 'Spearman', cost: pieceCosts['spearman'] },
-                { type: 'baron', name: 'Baron', cost: pieceCosts['baron'] },
-                { type: 'knight', name: 'Knight', cost: pieceCosts['knight'] }
-            ];
-            
-            items.forEach(itemData => {
-                const buildItem = createBuildItemInline(itemData.type, itemData.name, itemData.cost, true);
-                buildMenu.appendChild(buildItem);
-            });
+            // Don't show items if we can't fetch province data
         });
 }
 
@@ -359,11 +346,115 @@ function handleBuildPiece(pieceType) {
     }
     
     const hex = gameBoard.selectedHexForBuild;
+    console.log('Entering placement mode for', pieceType, 'from province hex', hex);
+    
+    // Enter placement mode: fetch valid placement hexes
+    fetch('/api/game/valid-placement', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            province_coordinate1: hex.coordinate1,
+            province_coordinate2: hex.coordinate2,
+            piece_type: pieceType
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            // Enter placement mode with valid hexes
+            gameBoard.setPlacementMode(pieceType, hex, data.valid_hexes);
+            console.log('Placement mode active. Valid hexes:', data.valid_hexes.length);
+        } else {
+            console.error('Failed to get valid placement hexes:', data.error);
+            alert('Cannot place ' + pieceType + ': ' + data.error);
+        }
+    })
+    .catch(error => {
+        console.error('Error fetching valid placement hexes:', error);
+        alert('Error: ' + error.message);
+    });
+}
+
+function handlePlacementBuild(hex, pieceType) {
     console.log('Building', pieceType, 'on hex', hex);
     
-    // TODO: Send build command to backend
-    // For now, just close the menu
-    closeBuildMenu();
+    // Get province hex for units (needed when building on gray hexes)
+    const provinceHex = gameBoard && gameBoard.placementProvinceHex;
+    
+    // Send build command to backend
+    const buildData = {
+        coordinate1: hex.coordinate1,
+        coordinate2: hex.coordinate2,
+        piece_type: pieceType
+    };
+    
+    // Include province coordinates for units (allows building on gray hexes)
+    if (provinceHex) {
+        buildData.province_coordinate1 = provinceHex.coordinate1;
+        buildData.province_coordinate2 = provinceHex.coordinate2;
+    }
+    
+    fetch('/api/game/build', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(buildData)
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            console.log('Build successful:', data.message);
+            // Store province hex before reloading (since placement mode will be cancelled)
+            const provinceHexToUpdate = provinceHex || (gameBoard && gameBoard.selectedHexForBuild);
+            
+            // Cancel placement mode (remove outlines) but keep selectedHexForBuild
+            if (gameBoard) {
+                gameBoard.cancelPlacementMode();
+                // Ensure selectedHexForBuild is still set to the province hex
+                if (provinceHexToUpdate && !gameBoard.selectedHexForBuild) {
+                    gameBoard.selectedHexForBuild = provinceHexToUpdate;
+                }
+            }
+            
+            // Reload game state to show the new piece, then update province status and rebuild menu
+            loadGameState().then(() => {
+                // Update province status to show new money amount
+                if (provinceHexToUpdate) {
+                    updateProvinceStatus(provinceHexToUpdate);
+                    // Re-populate build menu with updated costs (money changed)
+                    // Find the hex in the updated game state
+                    const updatedHex = gameBoard.hexes.find(h => 
+                        h.coordinate1 === provinceHexToUpdate.coordinate1 && 
+                        h.coordinate2 === provinceHexToUpdate.coordinate2
+                    );
+                    if (updatedHex) {
+                        gameBoard.selectedHexForBuild = updatedHex;
+                        showBuildMenu(updatedHex);
+                    }
+                }
+            }).catch(error => {
+                console.error('Error reloading game state:', error);
+            });
+        } else {
+            console.error('Build failed:', data.error);
+            alert('Build failed: ' + data.error);
+            // Cancel placement mode on error
+            if (gameBoard) {
+                gameBoard.cancelPlacementMode();
+            }
+        }
+    })
+    .catch(error => {
+        console.error('Error building piece:', error);
+        alert('Error building piece: ' + error.message);
+        // Cancel placement mode on error
+        if (gameBoard) {
+            gameBoard.cancelPlacementMode();
+        }
+    });
 }
 
 // Province Status Functions
@@ -413,7 +504,6 @@ function updateProvinceStatus(hex) {
 
 function hideProvinceStatus() {
     const statusBar = document.getElementById('statusBar');
-    const actionsBar = document.getElementById('actionsBar');
     const statusFunds = document.getElementById('statusFunds');
     const statusProfit = document.getElementById('statusProfit');
     const statusCityName = document.getElementById('statusCityName');
@@ -429,8 +519,5 @@ function hideProvinceStatus() {
         statusCityName.style.display = 'none';
     }
     
-    // Hide actions bar
-    if (actionsBar) {
-        actionsBar.style.display = 'none';
-    }
+    // Actions bar is always visible now, so we don't hide it
 }

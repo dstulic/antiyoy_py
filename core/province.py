@@ -435,6 +435,8 @@ class ProvincesManager(IEventListener):
         self.reduction_worker = ProvincesReductionWorker(self)
         self.current_id = 0
         self._name_generator = SimpleNameGenerator()
+        self._previous_color: Optional[HColor] = None
+        self._previous_color: Optional[HColor] = None
 
     def add_province(self) -> Province:
         """Add a new province."""
@@ -511,9 +513,26 @@ class ProvincesManager(IEventListener):
         """Handle event validated."""
         pass
 
+    def on_event_validated(self, event: AbstractEvent) -> None:
+        """Handle event validated (before application)."""
+        from core.events import EventPieceBuild
+        from core.core_utils import is_unit
+        
+        # Track previous color for piece_build events (for units that change hex color)
+        if event.get_type() == EventType.PIECE_BUILD:
+            if isinstance(event, EventPieceBuild) and event.hex:
+                if is_unit(event.piece_type):
+                    # Store previous color before it changes
+                    self._previous_color = event.hex.color
+                else:
+                    self._previous_color = None
+        else:
+            self._previous_color = None
+
     def on_event_applied(self, event: AbstractEvent) -> None:
         """Handle event applied."""
-        from core.events import EventHexChangeColor
+        from core.events import EventHexChangeColor, EventPieceBuild
+        from core.core_utils import is_unit
 
         if event.get_type() == EventType.HEX_CHANGE_COLOR:
             if isinstance(event, EventHexChangeColor):
@@ -525,6 +544,53 @@ class ProvincesManager(IEventListener):
                 # Trigger reduction worker
                 if event.hex and previous_color:
                     self.reduction_worker.on_hex_color_changed(event.hex, previous_color)
+        elif event.get_type() == EventType.PIECE_BUILD:
+            # Handle unit builds that change hex color (e.g., building on gray hex)
+            if isinstance(event, EventPieceBuild) and event.hex:
+                if is_unit(event.piece_type):
+                    previous_color = getattr(self, '_previous_color', None)
+                    if previous_color is not None and previous_color != event.hex.color:
+                        # Hex color changed - need to update provinces
+                        # First handle reduction (if hex was part of a province)
+                        if previous_color != HColor.GRAY:
+                            self.reduction_worker.on_hex_color_changed(event.hex, previous_color)
+                        # Then handle enlargement (add hex to adjacent province of new color)
+                        if event.hex.color != HColor.GRAY:
+                            self._enlarge_province_for_hex(event.hex)
+
+    def _enlarge_province_for_hex(self, hex: Hex) -> None:
+        """Enlarge province to include hex (when hex color changes to match adjacent province)."""
+        # Find adjacent provinces of the same color
+        adjacent_provinces = []
+        for adj_hex in hex.adjacent_hexes:
+            if adj_hex.color == hex.color:
+                province = adj_hex.get_province()
+                if province and province.get_color() == hex.color:
+                    if province not in adjacent_provinces:
+                        adjacent_provinces.append(province)
+        
+        if len(adjacent_provinces) == 0:
+            # No adjacent province found - create new province for this hex
+            # (This should only happen if hex is isolated)
+            if hex.color != HColor.GRAY:
+                province = self.add_province()
+                province.add_hex(hex)
+        elif len(adjacent_provinces) == 1:
+            # Single adjacent province - add hex to it
+            adjacent_provinces[0].add_hex(hex)
+        else:
+            # Multiple adjacent provinces - merge into largest and add hex
+            largest_province = max(adjacent_provinces, key=lambda p: len(p.get_hexes()))
+            largest_province.add_hex(hex)
+            # Merge other provinces into largest
+            for province in adjacent_provinces:
+                if province == largest_province:
+                    continue
+                # Transfer hexes and money
+                for h in province.get_hexes():
+                    largest_province.add_hex(h)
+                largest_province.set_money(largest_province.get_money() + province.get_money())
+                self.remove_province(province)
 
     def get_listen_priority(self) -> int:
         """Get listener priority."""

@@ -420,6 +420,229 @@ def api_game_action():
     return jsonify({'success': True})
 
 
+@app.route('/api/game/valid-placement', methods=['POST'])
+def api_game_valid_placement():
+    """Get valid hexes for placing a piece type from a province."""
+    session_id = session.get('session_id')
+    if not session_id or session_id not in game_sessions:
+        return jsonify({'success': False, 'error': 'No active game session'}), 404
+    
+    # Mark session as recently used (move to end)
+    game_sessions.move_to_end(session_id)
+    
+    session_data = game_sessions[session_id]
+    game_state = session_data.get('game_state')
+    
+    if game_state is None:
+        return jsonify({'success': False, 'error': 'Game state not available'}), 500
+    
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'error': 'No data provided'}), 400
+    
+    # Get parameters
+    try:
+        province_coord1 = int(data.get('province_coordinate1'))
+        province_coord2 = int(data.get('province_coordinate2'))
+        piece_type_str = data.get('piece_type')
+    except (ValueError, TypeError) as e:
+        return jsonify({'success': False, 'error': f'Invalid parameters: {e}'}), 400
+    
+    if not piece_type_str:
+        return jsonify({'success': False, 'error': 'piece_type is required'}), 400
+    
+    # Convert piece type string to enum
+    from core.enums import PieceType
+    try:
+        piece_type = PieceType(piece_type_str.lower())
+    except ValueError:
+        return jsonify({'success': False, 'error': f'Invalid piece type: {piece_type_str}'}), 400
+    
+    # Get the province hex
+    province_hex = game_state.get_hex(province_coord1, province_coord2)
+    if not province_hex:
+        return jsonify({'success': False, 'error': 'Province hex not found'}), 404
+    
+    # Get the province
+    province = province_hex.get_province()
+    if not province:
+        return jsonify({'success': False, 'error': 'Hex is not in a province'}), 400
+    
+    # Get current player
+    current_entity = game_state.entities_manager.get_current_entity()
+    if not current_entity:
+        return jsonify({'success': False, 'error': 'No current player'}), 400
+    
+    # Check if province belongs to current player
+    if province.get_color() != current_entity.color:
+        return jsonify({'success': False, 'error': 'Province does not belong to current player'}), 403
+    
+    # Calculate valid placement hexes
+    from core.core_utils import is_unit, get_strength
+    valid_hexes = []
+    
+    if is_unit(piece_type):
+        # For units: hexes adjacent to province hexes (within move range)
+        # Simplified: get all hexes adjacent to any province hex
+        province_hexes = province.get_hexes()
+        strength = get_strength(piece_type)
+        
+        # Get all hexes within reach (adjacent to province)
+        visited_coords = set()
+        for p_hex in province_hexes:
+            for adj_hex in p_hex.adjacent_hexes:
+                coord_key = (adj_hex.coordinate1, adj_hex.coordinate2)
+                if coord_key in visited_coords:
+                    continue
+                visited_coords.add(coord_key)
+                
+                # Check if hex can accept unit
+                # Units can be placed on: empty hexes, trees, graves
+                # Cannot be placed on: static pieces (unless tree/grave)
+                if adj_hex.is_empty():
+                    valid_hexes.append({
+                        'coordinate1': adj_hex.coordinate1,
+                        'coordinate2': adj_hex.coordinate2
+                    })
+                elif adj_hex.piece in (PieceType.PINE, PieceType.PALM, PieceType.GRAVE):
+                    valid_hexes.append({
+                        'coordinate1': adj_hex.coordinate1,
+                        'coordinate2': adj_hex.coordinate2
+                    })
+                elif adj_hex.has_unit() and adj_hex.color == province.get_color():
+                    # Can merge with existing unit (build on top of it)
+                    valid_hexes.append({
+                        'coordinate1': adj_hex.coordinate1,
+                        'coordinate2': adj_hex.coordinate2
+                    })
+    elif piece_type == PieceType.FARM:
+        # For farms: empty hexes within the province
+        for hex in province.get_hexes():
+            if hex.is_empty():
+                valid_hexes.append({
+                    'coordinate1': hex.coordinate1,
+                    'coordinate2': hex.coordinate2
+                })
+    elif piece_type == PieceType.TOWER:
+        # For towers: empty hexes within the province
+        for hex in province.get_hexes():
+            if hex.is_empty():
+                valid_hexes.append({
+                    'coordinate1': hex.coordinate1,
+                    'coordinate2': hex.coordinate2
+                })
+    elif piece_type == PieceType.STRONG_TOWER:
+        # For strong towers: hexes with towers within the province
+        for hex in province.get_hexes():
+            if hex.piece == PieceType.TOWER:
+                valid_hexes.append({
+                    'coordinate1': hex.coordinate1,
+                    'coordinate2': hex.coordinate2
+                })
+    
+    # Filter to only visible hexes (respect fog of war)
+    visible_hexes = game_state.get_hexes_for_player(current_entity.color)
+    visible_coords = {(h.coordinate1, h.coordinate2) for h in visible_hexes}
+    
+    valid_hexes = [
+        h for h in valid_hexes
+        if (h['coordinate1'], h['coordinate2']) in visible_coords
+    ]
+    
+    return jsonify({
+        'success': True,
+        'valid_hexes': valid_hexes
+    })
+
+
+@app.route('/api/game/build', methods=['POST'])
+def api_game_build():
+    """Build a piece on a hex."""
+    session_id = session.get('session_id')
+    if not session_id or session_id not in game_sessions:
+        return jsonify({'success': False, 'error': 'No active game session'}), 404
+    
+    # Mark session as recently used (move to end)
+    game_sessions.move_to_end(session_id)
+    
+    session_data = game_sessions[session_id]
+    game_state = session_data.get('game_state')
+    
+    if game_state is None:
+        return jsonify({'success': False, 'error': 'Game state not available'}), 500
+    
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'error': 'No data provided'}), 400
+    
+    # Get parameters
+    try:
+        coordinate1 = int(data.get('coordinate1'))
+        coordinate2 = int(data.get('coordinate2'))
+        piece_type_str = data.get('piece_type')
+        # Optional: province coordinates (for units built on gray hexes)
+        province_coord1 = data.get('province_coordinate1')
+        province_coord2 = data.get('province_coordinate2')
+    except (ValueError, TypeError) as e:
+        return jsonify({'success': False, 'error': f'Invalid parameters: {e}'}), 400
+    
+    if not piece_type_str:
+        return jsonify({'success': False, 'error': 'piece_type is required'}), 400
+    
+    # Convert piece type string to enum
+    from core.enums import PieceType
+    try:
+        piece_type = PieceType(piece_type_str.lower())
+    except ValueError:
+        return jsonify({'success': False, 'error': f'Invalid piece type: {piece_type_str}'}), 400
+    
+    # Get the target hex (where we're building)
+    hex_obj = game_state.get_hex(coordinate1, coordinate2)
+    if not hex_obj:
+        return jsonify({'success': False, 'error': 'Hex not found'}), 404
+    
+    # Get province hex if provided (for units on gray hexes)
+    province_hex = None
+    if province_coord1 is not None and province_coord2 is not None:
+        try:
+            province_hex = game_state.get_hex(int(province_coord1), int(province_coord2))
+        except (ValueError, TypeError):
+            pass
+    
+    # Get current player
+    current_entity = game_state.entities_manager.get_current_entity()
+    if not current_entity:
+        return jsonify({'success': False, 'error': 'No current player'}), 400
+    
+    # Create build command
+    from commands.types import BuildPieceCommand
+    from commands.executor import CommandExecutor
+    
+    command = BuildPieceCommand(
+        hex=hex_obj,
+        piece_type=piece_type,
+        province_hex=province_hex
+    )
+    
+    # Execute command
+    executor = CommandExecutor(game_state)
+    success, error = executor.execute(command, current_entity.color)
+    
+    if success:
+        # Get province for response
+        province = province_hex.get_province() if province_hex else hex_obj.get_province()
+        if not province:
+            province = game_state.provinces_manager.find_province_slowly(hex_obj)
+        
+        return jsonify({
+            'success': True,
+            'message': f'Built {piece_type.value} successfully',
+            'province_money': province.get_money() if province else 0
+        })
+    else:
+        return jsonify({'success': False, 'error': error or 'Build failed'}), 400
+
+
 @app.route('/api/game/restart', methods=['POST'])
 def api_game_restart():
     """Restart the current game."""

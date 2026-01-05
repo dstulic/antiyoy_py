@@ -16,6 +16,12 @@ class GameBoard {
         this.currentPlayerColor = null; // Current player's color (for selection filtering)
         this.selectedHexForBuild = null; // Hex selected for building menu
         
+        // Placement mode state
+        this.placementMode = false;
+        this.placementPieceType = null;
+        this.placementProvinceHex = null;
+        this.validPlacementHexes = []; // Array of {coordinate1, coordinate2}
+        
         // Pan and zoom state
         this.isPanning = false;
         this.panStartX = 0;
@@ -176,6 +182,11 @@ class GameBoard {
             this.selectedHex.coordinate2 === hex.coordinate2) {
             this.drawSelectionBorder(x, y);
         }
+        
+        // Draw placement outline if in placement mode and hex is valid
+        if (this.placementMode && this.isValidPlacementHex(hex)) {
+            this.drawPlacementOutline(x, y);
+        }
     }
     
     drawHexShape(x, y, color) {
@@ -279,6 +290,57 @@ class GameBoard {
         ctx.stroke();
         
         ctx.restore();
+    }
+    
+    drawPlacementOutline(x, y) {
+        const ctx = this.ctx;
+        const radius = this.hexSize * this.scale;
+        
+        ctx.save();
+        ctx.strokeStyle = '#00FF00'; // Green color for valid placement
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 5]); // Dashed line
+        
+        ctx.beginPath();
+        for (let i = 0; i < 6; i++) {
+            // Offset by -π/2 to match hex drawing (pointy-top)
+            const angle = (Math.PI / 3 * i) - (Math.PI / 2);
+            const hx = x + radius * Math.cos(angle);
+            const hy = y + radius * Math.sin(angle);
+            if (i === 0) {
+                ctx.moveTo(hx, hy);
+            } else {
+                ctx.lineTo(hx, hy);
+            }
+        }
+        ctx.closePath();
+        ctx.stroke();
+        ctx.restore();
+    }
+    
+    isValidPlacementHex(hex) {
+        if (!this.placementMode || this.validPlacementHexes.length === 0) {
+            return false;
+        }
+        return this.validPlacementHexes.some(
+            vh => vh.coordinate1 === hex.coordinate1 && vh.coordinate2 === hex.coordinate2
+        );
+    }
+    
+    setPlacementMode(pieceType, provinceHex, validHexes) {
+        this.placementMode = true;
+        this.placementPieceType = pieceType;
+        this.placementProvinceHex = provinceHex;
+        this.validPlacementHexes = validHexes || [];
+        this.render();
+    }
+    
+    cancelPlacementMode() {
+        this.placementMode = false;
+        this.placementPieceType = null;
+        this.placementProvinceHex = null;
+        this.validPlacementHexes = [];
+        this.render();
     }
     
     handleMouseMove(e) {
@@ -387,6 +449,22 @@ class GameBoard {
             h.coordinate2 === hexCoords.r
         );
         
+        // Check if we're in placement mode
+        if (this.placementMode) {
+            if (hex && this.isValidPlacementHex(hex)) {
+                // Valid placement hex selected - build the piece
+                handlePlacementBuild(hex, this.placementPieceType);
+                this.cancelPlacementMode();
+            } else {
+                // Invalid hex or empty space - cancel placement mode
+                this.cancelPlacementMode();
+                closeBuildMenu();
+                hideProvinceStatus();
+            }
+            return;
+        }
+        
+        // Normal selection mode
         if (hex) {
             // Only select hexes owned by the current player
             // If currentPlayerColor is not set, allow selection (for backwards compatibility)
@@ -395,6 +473,11 @@ class GameBoard {
                 closeBuildMenu();
                 hideProvinceStatus();
                 return;
+            }
+            
+            // Cancel placement mode if selecting a different hex
+            if (this.placementMode) {
+                this.cancelPlacementMode();
             }
             
             this.selectedHex = hex;
