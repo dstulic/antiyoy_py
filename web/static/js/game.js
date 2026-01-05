@@ -363,6 +363,22 @@ function handleBuildPiece(pieceType) {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
+            // Check if there are any valid hexes
+            if (!data.valid_hexes || data.valid_hexes.length === 0) {
+                // Generate appropriate error message based on piece type
+                let errorMsg = 'No valid locations to place ' + pieceType + '.';
+                if (pieceType === 'farm') {
+                    errorMsg += ' Farms must be adjacent to a city or another farm.';
+                } else if (pieceType === 'tower') {
+                    errorMsg += ' Towers can only be built on empty hexes within the province.';
+                } else if (pieceType === 'strong_tower') {
+                    errorMsg += ' Strong towers can only be built on existing towers.';
+                } else if (['peasant', 'spearman', 'baron', 'knight'].includes(pieceType)) {
+                    errorMsg += ' Units can only be built on empty hexes or trees.';
+                }
+                alert(errorMsg);
+                return;
+            }
             // Enter placement mode with valid hexes
             gameBoard.setPlacementMode(pieceType, hex, data.valid_hexes);
             console.log('Placement mode active. Valid hexes:', data.valid_hexes.length);

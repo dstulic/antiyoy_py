@@ -37,7 +37,7 @@ class GameBoard {
     
     preloadPieceImages() {
         const pieces = ['peasant', 'spearman', 'baron', 'knight', 'tower', 'strong_tower', 'city', 
-                       'farm0', 'farm1', 'farm2', 'grave', 'palm', 'pine'];
+                       'farm', 'farm0', 'farm1', 'farm2', 'grave', 'palm', 'pine'];
         
         let loadedCount = 0;
         const totalImages = pieces.length;

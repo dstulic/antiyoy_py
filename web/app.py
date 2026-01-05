@@ -516,13 +516,26 @@ def api_game_valid_placement():
                         'coordinate2': adj_hex.coordinate2
                     })
     elif piece_type == PieceType.FARM:
-        # For farms: empty hexes within the province
-        for hex in province.get_hexes():
-            if hex.is_empty():
-                valid_hexes.append({
-                    'coordinate1': hex.coordinate1,
-                    'coordinate2': hex.coordinate2
-                })
+        # For farms: empty hexes within the province that are adjacent to a city or farm
+        # This matches MoveZoneManager.updateForFarm() logic
+        province_hexes = province.get_hexes()
+        
+        # Mark hexes that are adjacent to cities or farms
+        valid_hex_coords = set()
+        for p_hex in province_hexes:
+            # If hex has a city or farm, mark it and its adjacent hexes
+            if p_hex.piece in (PieceType.CITY, PieceType.FARM):
+                # Mark adjacent hexes if they're empty and in the province
+                for adj_hex in p_hex.adjacent_hexes:
+                    if adj_hex.color == province.get_color() and adj_hex.is_empty():
+                        valid_hex_coords.add((adj_hex.coordinate1, adj_hex.coordinate2))
+        
+        # Convert to list format
+        for coord in valid_hex_coords:
+            valid_hexes.append({
+                'coordinate1': coord[0],
+                'coordinate2': coord[1]
+            })
     elif piece_type == PieceType.TOWER:
         # For towers: empty hexes within the province
         for hex in province.get_hexes():
