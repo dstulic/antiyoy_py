@@ -85,13 +85,32 @@ class CommandValidator:
         if command.start_hex.color != player_color:
             return False, "Unit does not belong to player"
         
-        # Check finish hex is adjacent
-        if not command.start_hex.is_linked_to(command.finish_hex):
-            return False, "Finish hex is not adjacent to start hex"
+        # Check if unit is ready to move
+        if not self.game_state.readiness_manager.is_ready(command.start_hex):
+            return False, "Unit has already moved this turn"
         
-        # Check finish hex is empty or has enemy unit
+        # Use MoveZoneManager to check if finish hex is reachable (up to 4 hexes away)
+        # Ensure adjacency is built
+        if not command.start_hex.adjacent_hexes:
+            from save_load.decoder import _build_adjacency_graph
+            _build_adjacency_graph(self.game_state)
+        
+        # Update move zone for the unit
+        self.game_state.move_zone_manager.update_for_unit(command.start_hex)
+        
+        # Check if finish hex is in the move zone
+        if not self.game_state.move_zone_manager.contains(command.finish_hex):
+            return False, "Finish hex is not reachable (outside movement range)"
+        
+        # Check finish hex is empty, has enemy unit, or has friendly unit (for merging)
         if command.finish_hex.has_unit() and command.finish_hex.color == player_color:
-            return False, "Cannot move to hex with friendly unit"
+            # Check if both hexes are in the same province (required for merging)
+            if command.start_hex.get_province() != command.finish_hex.get_province():
+                return False, "Cannot move to hex with friendly unit in different province"
+            # Check if merge result is valid
+            from core.core_utils import get_merge_result
+            if get_merge_result(command.start_hex.piece, command.finish_hex.piece) is None:
+                return False, "Cannot merge these units"
         
         return True, None
 
@@ -157,7 +176,12 @@ class CommandValidator:
             if command.hex.has_piece():
                 if command.hex.piece not in (PieceType.PINE, PieceType.PALM, PieceType.GRAVE):
                     # Check if it's a mergeable unit (same color)
-                    if not (command.hex.has_unit() and command.hex.color == province.get_color()):
+                    if command.hex.has_unit() and command.hex.color == province.get_color():
+                        # Check if merge result is valid
+                        from core.core_utils import get_merge_result
+                        if get_merge_result(command.piece_type, command.hex.piece) is None:
+                            return False, "Cannot merge these units"
+                    else:
                         return False, "Cannot build unit on this hex"
         else:
             # For static pieces (towers, farms), hex must be empty

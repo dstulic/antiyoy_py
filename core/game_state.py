@@ -53,9 +53,13 @@ class GameState(IEventListener):
         from core.tree_manager import TreeManager
         self.tree_manager = TreeManager(self)
         
-        # Placeholder managers (to be implemented later)
-        self.move_zone_manager = None
-        self.readiness_manager = None
+        # Move zone manager - calculates valid movement hexes for units
+        from core.move_zone_manager import MoveZoneManager
+        self.move_zone_manager = MoveZoneManager(self)
+        
+        # Readiness manager - tracks which units can move this turn
+        from core.readiness_manager import ReadinessManager
+        self.readiness_manager = ReadinessManager(self)
         self.construction_manager = None
         self.city_manager = None
         self.diplomacy_manager = None

@@ -72,6 +72,50 @@ class CommandExecutor:
 
     def _execute_move_unit(self, command: MoveUnitCommand) -> tuple[bool, Optional[str]]:
         """Execute move unit command."""
+        from core.core_utils import get_merge_result
+        
+        # Check if this is a merge (moving a unit onto another unit of same color in same province)
+        if (command.finish_hex.has_unit() and 
+            command.start_hex.color == command.finish_hex.color and
+            command.start_hex.get_province() == command.finish_hex.get_province()):
+            # Check if merge result is valid
+            merge_result = get_merge_result(command.start_hex.piece, command.finish_hex.piece)
+            if merge_result is not None:
+                # Create merge event
+                events_factory = self.game_state.events_manager.factory
+                event = events_factory.create_event(EventType.MERGE)
+                if not event:
+                    return False, "Failed to create merge event"
+                
+                from core.events import EventMerge
+                if isinstance(event, EventMerge):
+                    event.set_start(command.start_hex)
+                    event.set_finish(command.finish_hex)
+                    event.set_unit_id(self.game_state.get_id_for_new_unit())
+                    
+                    # Get current entity for author
+                    current_entity = self.game_state.entities_manager.get_current_entity()
+                    if current_entity:
+                        event.set_author(current_entity)
+                    
+                    # Validate event
+                    if not event.is_valid():
+                        return False, "Merge event is not valid"
+                    
+                    # Apply event
+                    try:
+                        self.game_state.events_manager.apply_event(event)
+                        
+                        # Update fog of war if enabled
+                        if (self.game_state.fog_of_war_manager and 
+                            self.game_state.fog_of_war_manager.enabled):
+                            self.game_state.fog_of_war_manager.apply_update()
+                        
+                        return True, None
+                    except Exception as e:
+                        return False, f"Failed to apply merge event: {str(e)}"
+        
+        # Regular move event
         events_factory = self.game_state.events_manager.factory
         event = events_factory.create_event(EventType.UNIT_MOVE)
         
@@ -88,7 +132,7 @@ class CommandExecutor:
 
     def _execute_build_piece(self, command: BuildPieceCommand) -> tuple[bool, Optional[str]]:
         """Execute build piece command."""
-        from core.core_utils import is_unit
+        from core.core_utils import is_unit, get_merge_result
         
         # Get province - for units, use province from province_hex if provided (for gray hexes)
         # For static pieces, get province from the target hex
@@ -112,7 +156,43 @@ class CommandExecutor:
         if not current_entity:
             return False, "No current player"
         
-        # Create build event
+        # Check if this is a merge on build (building a unit on an existing unit of same color)
+        if is_unit(command.piece_type) and command.hex.has_unit() and command.hex.color == province.get_color():
+            # Check if merge result is valid
+            merge_result = get_merge_result(command.piece_type, command.hex.piece)
+            if merge_result is not None:
+                # Create merge on build event
+                events_factory = self.game_state.events_manager.factory
+                event = events_factory.create_event(EventType.MERGE_ON_BUILD)
+                if not event:
+                    return False, "Failed to create merge on build event"
+                
+                from core.events import EventMergeOnBuild
+                if isinstance(event, EventMergeOnBuild):
+                    event.set_hex(command.hex)
+                    event.set_piece_type(command.piece_type)
+                    event.set_province_id(province.get_id())
+                    event.set_unit_id(self.game_state.get_id_for_new_unit())
+                    event.set_author(current_entity)
+                    
+                    # Validate event
+                    if not event.is_valid():
+                        return False, "Merge on build event is not valid"
+                    
+                    # Apply event
+                    try:
+                        self.game_state.events_manager.apply_event(event)
+                        
+                        # Update fog of war if enabled
+                        if (self.game_state.fog_of_war_manager and 
+                            self.game_state.fog_of_war_manager.enabled):
+                            self.game_state.fog_of_war_manager.apply_update()
+                        
+                        return True, None
+                    except Exception as e:
+                        return False, f"Failed to apply merge on build event: {str(e)}"
+        
+        # Regular build event
         events_factory = self.game_state.events_manager.factory
         event = events_factory.create_event(EventType.PIECE_BUILD)
         if not event:

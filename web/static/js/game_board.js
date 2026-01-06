@@ -22,6 +22,11 @@ class GameBoard {
         this.placementProvinceHex = null;
         this.validPlacementHexes = []; // Array of {coordinate1, coordinate2}
         
+        // Movement mode state
+        this.movementMode = false;
+        this.selectedUnitHex = null; // Hex with unit selected for movement
+        this.validMovementHexes = []; // Array of {coordinate1, coordinate2}
+        
         // Pan and zoom state
         this.isPanning = false;
         this.panStartX = 0;
@@ -180,6 +185,11 @@ class GameBoard {
             this.drawPiece(x, y, hex.piece);
         }
         
+        // Gray out units that have moved (not ready) - draw after piece
+        if (hex.piece && isUnitPiece(hex.piece) && hex.is_ready === false) {
+            this.drawGrayedOutUnit(x, y);
+        }
+        
         // Draw selection border if selected
         if (this.selectedHex && 
             this.selectedHex.coordinate1 === hex.coordinate1 &&
@@ -190,6 +200,11 @@ class GameBoard {
         // Draw placement outline if in placement mode and hex is valid
         if (this.placementMode && this.isValidPlacementHex(hex)) {
             this.drawPlacementOutline(x, y);
+        }
+        
+        // Draw movement outline if in movement mode and hex is valid
+        if (this.movementMode && this.isValidMovementHex(hex)) {
+            this.drawMovementOutline(x, y);
         }
     }
     
@@ -266,7 +281,7 @@ class GameBoard {
         
         // Only draw if image is loaded
         if (img.complete && img.naturalHeight !== 0) {
-            const size = this.hexSize * 0.7 * this.scale;
+            const size = this.hexSize * this.scale;
             this.ctx.drawImage(
                 img,
                 x - size / 2,
@@ -351,6 +366,68 @@ class GameBoard {
         this.placementPieceType = null;
         this.placementProvinceHex = null;
         this.validPlacementHexes = [];
+        this.render();
+    }
+    
+    drawMovementOutline(x, y) {
+        const ctx = this.ctx;
+        const radius = this.hexSize * this.scale;
+        
+        ctx.save();
+        ctx.strokeStyle = '#FFFF00'; // Yellow color for valid movement
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 5]); // Dashed line
+        
+        ctx.beginPath();
+        for (let i = 0; i < 6; i++) {
+            // Offset by -π/2 to match hex drawing (pointy-top)
+            const angle = (Math.PI / 3 * i) - (Math.PI / 2);
+            const hx = x + radius * Math.cos(angle);
+            const hy = y + radius * Math.sin(angle);
+            if (i === 0) {
+                ctx.moveTo(hx, hy);
+            } else {
+                ctx.lineTo(hx, hy);
+            }
+        }
+        ctx.closePath();
+        ctx.stroke();
+        ctx.restore();
+    }
+    
+    drawGrayedOutUnit(x, y) {
+        const ctx = this.ctx;
+        const radius = this.hexSize * this.scale;
+        
+        ctx.save();
+        // Draw a semi-transparent overlay to gray out the unit
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+        ctx.beginPath();
+        ctx.arc(x, y, radius * 0.8, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.restore();
+    }
+    
+    isValidMovementHex(hex) {
+        if (!this.movementMode || this.validMovementHexes.length === 0) {
+            return false;
+        }
+        return this.validMovementHexes.some(
+            vh => vh.coordinate1 === hex.coordinate1 && vh.coordinate2 === hex.coordinate2
+        );
+    }
+    
+    setMovementMode(unitHex, validHexes) {
+        this.movementMode = true;
+        this.selectedUnitHex = unitHex;
+        this.validMovementHexes = validHexes || [];
+        this.render();
+    }
+    
+    cancelMovementMode() {
+        this.movementMode = false;
+        this.selectedUnitHex = null;
+        this.validMovementHexes = [];
         this.render();
     }
     
@@ -460,6 +537,19 @@ class GameBoard {
             h.coordinate2 === hexCoords.r
         );
         
+        // Check if we're in movement mode
+        if (this.movementMode) {
+            if (hex && this.isValidMovementHex(hex)) {
+                // Valid movement hex selected - move the unit
+                handleUnitMove(this.selectedUnitHex, hex);
+                this.cancelMovementMode();
+            } else {
+                // Invalid hex or empty space - cancel movement mode
+                this.cancelMovementMode();
+            }
+            return;
+        }
+        
         // Check if we're in placement mode
         if (this.placementMode) {
             if (hex && this.isValidPlacementHex(hex)) {
@@ -489,6 +579,13 @@ class GameBoard {
             // Cancel placement mode if selecting a different hex
             if (this.placementMode) {
                 this.cancelPlacementMode();
+            }
+            
+            // Check if hex has a unit that can move
+            if (hex.piece && isUnitPiece(hex.piece) && hex.is_ready !== false) {
+                // Unit selected - enter movement mode
+                handleUnitSelection(hex);
+                return;
             }
             
             this.selectedHex = hex;

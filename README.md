@@ -120,6 +120,11 @@ pip install pytest-xdist
 pytest tests/ -n auto
 ```
 
+### To run tests with coverage report:
+```bash
+pytest tests/ --cov=core --cov=save_load --cov=players --cov=commands --cov=visibility --cov=ai --cov-report=term -v
+```
+
 ## Project Structure
 
 - `core/` - Core game logic (hexes, provinces, events, rulesets, game state)

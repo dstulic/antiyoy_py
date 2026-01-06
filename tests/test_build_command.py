@@ -27,6 +27,14 @@ class MockRuleset:
     
     def get_price(self, province, piece_type: PieceType) -> int:
         return self.prices.get(piece_type, 0)
+    
+    def is_unit_ready_on_built(self) -> bool:
+        """Mock method for unit readiness on build."""
+        return True
+    
+    def get_tree_reward(self) -> int:
+        """Mock method for tree reward."""
+        return 5
 
 
 class MockProvincesManager:
@@ -114,6 +122,24 @@ class MockFogOfWarManager:
         pass
 
 
+class MockReadinessManager:
+    """Mock readiness manager for testing."""
+    
+    def __init__(self):
+        self.ready_hexes = []
+    
+    def is_ready(self, hex_obj):
+        """Check if hex is ready."""
+        return hex_obj in self.ready_hexes
+    
+    def set_ready(self, hex_obj, value: bool):
+        """Set hex readiness."""
+        if value and hex_obj not in self.ready_hexes:
+            self.ready_hexes.append(hex_obj)
+        elif not value and hex_obj in self.ready_hexes:
+            self.ready_hexes.remove(hex_obj)
+
+
 def create_mock_game_state(hexes, provinces, current_color: HColor, ruleset=None):
     """Create a mock game state for testing."""
     game_state = GameState.__new__(GameState)
@@ -123,6 +149,7 @@ def create_mock_game_state(hexes, provinces, current_color: HColor, ruleset=None
     game_state.entities_manager = MockEntitiesManager(current_color)
     game_state.events_manager = MockEventsManager(game_state)
     game_state.fog_of_war_manager = MockFogOfWarManager(enabled=False)
+    game_state.readiness_manager = MockReadinessManager()
     
     # Mock get_hex method
     def get_hex(c1, c2):

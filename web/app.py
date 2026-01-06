@@ -247,15 +247,30 @@ def api_game_state():
     # Only send hexes that are visible - fogged hexes are not sent to the client
     visible_hexes = game_state.get_hexes_for_player(current_player_color)
     
+    # Get readiness information (which units can move)
+    ready_hex_coords = set()
+    if hasattr(game_state, 'readiness_manager') and game_state.readiness_manager:
+        for hex in game_state.readiness_manager.ready_hexes:
+            ready_hex_coords.add((hex.coordinate1, hex.coordinate2))
+    
+    # Get readiness information (which units can move)
+    ready_hex_coords = set()
+    if hasattr(game_state, 'readiness_manager') and game_state.readiness_manager:
+        for hex in game_state.readiness_manager.ready_hexes:
+            ready_hex_coords.add((hex.coordinate1, hex.coordinate2))
+    
     # Serialize only visible hexes for rendering
     hexes = []
     for hex in visible_hexes:
+        hex_coord = (hex.coordinate1, hex.coordinate2)
+        is_ready = hex_coord in ready_hex_coords
         hex_data = {
             'coordinate1': hex.coordinate1,
             'coordinate2': hex.coordinate2,
             'color': hex.color.value if hasattr(hex.color, 'value') else str(hex.color),
             'piece': hex.piece.value if hex.piece and hasattr(hex.piece, 'value') else None,
-            'unit_id': hex.unit_id
+            'unit_id': hex.unit_id,
+            'is_ready': is_ready  # Whether unit can move this turn
         }
         hexes.append(hex_data)
     
@@ -717,6 +732,176 @@ def api_game_undo():
             return jsonify({'success': False, 'error': 'Failed to undo action'}), 500
     except Exception as e:
         return jsonify({'success': False, 'error': f'Error during undo: {str(e)}'}), 500
+
+
+@app.route('/api/game/valid-movement', methods=['POST'])
+def api_game_valid_movement():
+    """Get valid hexes for moving a unit."""
+    session_id = session.get('session_id')
+    if not session_id or session_id not in game_sessions:
+        return jsonify({'success': False, 'error': 'No active game session'}), 404
+    
+    # Mark session as recently used (move to end)
+    game_sessions.move_to_end(session_id)
+    
+    session_data = game_sessions[session_id]
+    game_state = session_data.get('game_state')
+    
+    if game_state is None:
+        return jsonify({'success': False, 'error': 'Game state not available'}), 500
+    
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'error': 'No data provided'}), 400
+    
+    # Get parameters
+    try:
+        coord1 = int(data.get('coordinate1'))
+        coord2 = int(data.get('coordinate2'))
+    except (ValueError, TypeError) as e:
+        return jsonify({'success': False, 'error': f'Invalid parameters: {e}'}), 400
+    
+    # Get the hex
+    hex = game_state.get_hex(coord1, coord2)
+    if not hex:
+        return jsonify({'success': False, 'error': 'Hex not found'}), 404
+    
+    # Check if hex has a unit
+    if not hex.has_unit():
+        return jsonify({'success': False, 'error': 'Hex does not have a unit'}), 400
+    
+    # Get current player
+    current_entity = game_state.entities_manager.get_current_entity()
+    if not current_entity:
+        return jsonify({'success': False, 'error': 'No current player'}), 400
+    
+    # Check if unit belongs to current player
+    if hex.color != current_entity.color:
+        return jsonify({'success': False, 'error': 'Unit does not belong to current player'}), 403
+    
+    # Check if unit is ready to move
+    if not game_state.readiness_manager.is_ready(hex):
+        return jsonify({'success': False, 'error': 'Unit has already moved this turn'}), 400
+    
+    # Ensure adjacency is built (if not already)
+    if not hex.adjacent_hexes:
+        from save_load.decoder import _build_adjacency_graph
+        _build_adjacency_graph(game_state)
+    
+    # Use MoveZoneManager to calculate valid movement hexes (up to 4 hexes away)
+    game_state.move_zone_manager.update_for_unit(hex)
+    
+    # Filter valid hexes based on game rules
+    valid_hexes = []
+    from core.core_utils import get_merge_result
+    from core.enums import PieceType
+    
+    for move_hex in game_state.move_zone_manager.hexes:
+        # Skip the start hex itself
+        if move_hex == hex:
+            continue
+        
+        # Can move to empty hexes, trees, graves, or enemy units
+        # Can also move to friendly units in same province (for merging)
+        can_move = False
+        
+        if move_hex.is_empty():
+            can_move = True
+        elif move_hex.piece in (PieceType.PINE, PieceType.PALM, PieceType.GRAVE):
+            can_move = True
+        elif move_hex.has_unit():
+            # Can move to enemy units (capture)
+            if move_hex.color != hex.color:
+                can_move = True
+            # Can move to friendly units in same province (merge)
+            elif (move_hex.get_province() == hex.get_province() and 
+                  get_merge_result(hex.piece, move_hex.piece) is not None):
+                can_move = True
+        
+        if can_move:
+            valid_hexes.append({
+                'coordinate1': move_hex.coordinate1,
+                'coordinate2': move_hex.coordinate2
+            })
+    
+    return jsonify({
+        'success': True,
+        'valid_hexes': valid_hexes
+    })
+
+
+@app.route('/api/game/move-unit', methods=['POST'])
+def api_game_move_unit():
+    """Move a unit from one hex to another."""
+    session_id = session.get('session_id')
+    if not session_id or session_id not in game_sessions:
+        return jsonify({'success': False, 'error': 'No active game session'}), 404
+    
+    # Mark session as recently used (move to end)
+    game_sessions.move_to_end(session_id)
+    
+    session_data = game_sessions[session_id]
+    game_state = session_data.get('game_state')
+    
+    if game_state is None:
+        return jsonify({'success': False, 'error': 'Game state not available'}), 500
+    
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'error': 'No data provided'}), 400
+    
+    # Get parameters
+    try:
+        start_coord1 = int(data.get('start_coordinate1'))
+        start_coord2 = int(data.get('start_coordinate2'))
+        finish_coord1 = int(data.get('finish_coordinate1'))
+        finish_coord2 = int(data.get('finish_coordinate2'))
+    except (ValueError, TypeError) as e:
+        return jsonify({'success': False, 'error': f'Invalid parameters: {e}'}), 400
+    
+    # Get the hexes
+    start_hex = game_state.get_hex(start_coord1, start_coord2)
+    finish_hex = game_state.get_hex(finish_coord1, finish_coord2)
+    
+    if not start_hex:
+        return jsonify({'success': False, 'error': 'Start hex not found'}), 404
+    if not finish_hex:
+        return jsonify({'success': False, 'error': 'Finish hex not found'}), 404
+    
+    # Get current player
+    current_entity = game_state.entities_manager.get_current_entity()
+    if not current_entity:
+        return jsonify({'success': False, 'error': 'No current player'}), 400
+    
+    # Create and execute move command
+    from commands.types import MoveUnitCommand
+    from commands.executor import CommandExecutor
+    from commands.validator import CommandValidator
+    
+    command = MoveUnitCommand(
+        start_hex=start_hex,
+        finish_hex=finish_hex,
+        color_transfer_enabled=True
+    )
+    
+    validator = CommandValidator(game_state)
+    executor = CommandExecutor(game_state)
+    
+    # Validate command
+    is_valid, error = validator.validate(command, current_entity.color)
+    if not is_valid:
+        return jsonify({'success': False, 'error': error}), 400
+    
+    # Execute command
+    success, error = executor.execute(command, current_entity.color)
+    if not success:
+        return jsonify({'success': False, 'error': error}), 400
+    
+    # Update fog of war if enabled
+    if game_state.fog_of_war_manager and game_state.fog_of_war_manager.enabled:
+        game_state.fog_of_war_manager.apply_update()
+    
+    return jsonify({'success': True, 'message': 'Unit moved successfully'})
 
 
 @app.route('/api/game/end-turn', methods=['POST'])

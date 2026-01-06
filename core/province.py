@@ -436,7 +436,7 @@ class ProvincesManager(IEventListener):
         self.current_id = 0
         self._name_generator = SimpleNameGenerator()
         self._previous_color: Optional[HColor] = None
-        self._previous_color: Optional[HColor] = None
+        self._temp_unit_move_event: Optional[AbstractEvent] = None
 
     def add_province(self) -> Province:
         """Add a new province."""
@@ -510,15 +510,11 @@ class ProvincesManager(IEventListener):
         return None
 
     def on_event_validated(self, event: AbstractEvent) -> None:
-        """Handle event validated."""
-        pass
-
-    def on_event_validated(self, event: AbstractEvent) -> None:
         """Handle event validated (before application)."""
-        from core.events import EventPieceBuild
+        from core.events import EventPieceBuild, EventUnitMove
         from core.core_utils import is_unit
         
-        # Track previous color for piece_build events (for units that change hex color)
+        # Track previous color for events that change hex color
         if event.get_type() == EventType.PIECE_BUILD:
             if isinstance(event, EventPieceBuild) and event.hex:
                 if is_unit(event.piece_type):
@@ -526,24 +522,64 @@ class ProvincesManager(IEventListener):
                     self._previous_color = event.hex.color
                 else:
                     self._previous_color = None
+        elif event.get_type() == EventType.UNIT_MOVE:
+            # Track previous color for unit moves that change hex color
+            if isinstance(event, EventUnitMove) and event.finish:
+                if event.are_color_transfer_conditions_satisfied():
+                    # Store the event and previous color for later use
+                    self._temp_unit_move_event = event
+                    self._previous_color = event.finish.color
+                else:
+                    self._temp_unit_move_event = None
+                    self._previous_color = None
         else:
             self._previous_color = None
+            self._temp_unit_move_event = None
 
     def on_event_applied(self, event: AbstractEvent) -> None:
         """Handle event applied."""
-        from core.events import EventHexChangeColor, EventPieceBuild
+        from core.events import EventHexChangeColor, EventPieceBuild, EventUnitMove
         from core.core_utils import is_unit
+        from core.enums import HColor
 
         if event.get_type() == EventType.HEX_CHANGE_COLOR:
             if isinstance(event, EventHexChangeColor):
-                previous_color = None
-                if event.hex:
-                    # Need to track previous color - this is a simplification
-                    # In full implementation, we'd track this properly
-                    pass
-                # Trigger reduction worker
-                if event.hex and previous_color:
-                    self.reduction_worker.on_hex_color_changed(event.hex, previous_color)
+                previous_color = getattr(self, '_previous_color', None)
+                if event.hex and previous_color is not None and previous_color != event.hex.color:
+                    # Hex color changed - need to update provinces
+                    # First handle reduction (if hex was part of a province)
+                    if previous_color != HColor.GRAY:
+                        self.reduction_worker.on_hex_color_changed(event.hex, previous_color)
+                    # Then handle enlargement (add hex to adjacent province of new color)
+                    if event.hex.color != HColor.GRAY:
+                        self._enlarge_province_for_hex(event.hex)
+        elif event.get_type() == EventType.UNIT_MOVE:
+            # Handle unit moves that change hex color (color transfer)
+            if isinstance(event, EventUnitMove) and event.finish:
+                # Check if this is the temp event we stored (color transfer occurred)
+                if (hasattr(self, '_temp_unit_move_event') and 
+                    self._temp_unit_move_event is not None and
+                    self._temp_unit_move_event == event):
+                    # Color transfer occurred - update provinces
+                    previous_color = getattr(self, '_previous_color', None)
+                    if previous_color is not None and previous_color != event.finish.color:
+                        # Hex color changed - need to update provinces
+                        # First handle reduction (if hex was part of a province)
+                        if previous_color != HColor.GRAY:
+                            self.reduction_worker.on_hex_color_changed(event.finish, previous_color)
+                        # Then handle enlargement (add hex to adjacent province of new color)
+                        if event.finish.color != HColor.GRAY:
+                            self._enlarge_province_for_hex(event.finish)
+                    # Clear temp event
+                    self._temp_unit_move_event = None
+                # Also handle the case where color transfer happened but we didn't track it
+                # (fallback: check if finish hex color changed)
+                elif event.are_color_transfer_conditions_satisfied():
+                    # Color transfer occurred - check if hex color actually changed
+                    # This is a fallback in case the temp event tracking didn't work
+                    if event.finish.color != HColor.GRAY:
+                        # Try to find adjacent province and add hex to it
+                        self._enlarge_province_for_hex(event.finish)
         elif event.get_type() == EventType.PIECE_BUILD:
             # Handle unit builds that change hex color (e.g., building on gray hex)
             if isinstance(event, EventPieceBuild) and event.hex:
@@ -736,6 +772,26 @@ class SimpleNameGenerator:
             "Kakko",
             "Kama",
             "Kakako",
+            "TheArmor",
+            "DigitalBlood",
+            "GrizzlyBreaker",
+            "AcidSnake",
+            "BlisteredOutlaws",
+            "InvaderPenguin",
+            "WarioRaptor",
+            "SuperboyFallout",
+            "FastClawDraw",
+            "SystemSnap",
+            "RedReaperSlice",
+            "CoolCobra",
+            "CutthroatRattler",
+            "BruisedKnuckles",
+            "HurricaneMachine",
+            "WarlockAdmiral",
+            "Damin",
+            "Cytos",
+            "Inkronos",
+            "Grumblemoor",
         ]
         self.index = 0
 

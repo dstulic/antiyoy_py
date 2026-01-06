@@ -86,6 +86,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 // Initialize game board rendering
                 initializeGameBoard();
                 
+                // Load initial game state and auto-select city hex
+                loadGameState().then(() => {
+                    autoSelectCityHex();
+                });
+                
                 // Polling disabled for now - game state only updates on user actions
                 // Can be re-enabled later for AI turns or multiplayer
                 // startGameStatePolling();
@@ -104,13 +109,95 @@ window.addEventListener('beforeunload', () => {
     stopGameStatePolling();
 });
 
-// Handle escape key to cancel placement mode
+// Handle escape key to cancel placement mode or movement mode
 document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && gameBoard && gameBoard.placementMode) {
-        gameBoard.cancelPlacementMode();
-        closeBuildMenu();
+    if (e.key === 'Escape') {
+        if (gameBoard && gameBoard.placementMode) {
+            gameBoard.cancelPlacementMode();
+            closeBuildMenu();
+        } else if (gameBoard && gameBoard.movementMode) {
+            gameBoard.cancelMovementMode();
+        }
     }
 });
+
+// Helper function to check if a piece is a unit
+function isUnitPiece(piece) {
+    return piece === 'peasant' || piece === 'spearman' || piece === 'baron' || piece === 'knight';
+}
+
+// Handle unit selection - enter movement mode
+function handleUnitSelection(hex) {
+    if (!gameBoard || !hex) {
+        return;
+    }
+    
+    // Fetch valid movement hexes
+    fetch('/api/game/valid-movement', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            coordinate1: hex.coordinate1,
+            coordinate2: hex.coordinate2
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            // Enter movement mode with valid hexes
+            gameBoard.setMovementMode(hex, data.valid_hexes);
+            console.log('Movement mode active. Valid hexes:', data.valid_hexes.length);
+        } else {
+            console.error('Failed to get valid movement hexes:', data.error);
+            alert('Failed to get valid movement hexes: ' + (data.error || 'Unknown error'));
+        }
+    })
+    .catch(error => {
+        console.error('Error fetching valid movement hexes:', error);
+        alert('Error fetching valid movement hexes');
+    });
+}
+
+// Handle unit movement
+function handleUnitMove(startHex, finishHex) {
+    if (!gameBoard || !startHex || !finishHex) {
+        return;
+    }
+    
+    // Send move request to backend
+    fetch('/api/game/move-unit', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            start_coordinate1: startHex.coordinate1,
+            start_coordinate2: startHex.coordinate2,
+            finish_coordinate1: finishHex.coordinate1,
+            finish_coordinate2: finishHex.coordinate2
+        })
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            console.log('Unit moved successfully');
+            // Reload game state to reflect changes
+            loadGameState().then(() => {
+                // Cancel movement mode
+                gameBoard.cancelMovementMode();
+            });
+        } else {
+            console.error('Failed to move unit:', data.error);
+            alert('Failed to move unit: ' + (data.error || 'Unknown error'));
+        }
+    })
+    .catch(error => {
+        console.error('Error moving unit:', error);
+        alert('Error moving unit');
+    });
+}
 
 function initializeGameBoard() {
     // Create game board container
@@ -151,6 +238,46 @@ function loadGameState() {
             console.error('Error loading game state:', error);
             throw error;
         });
+}
+
+function autoSelectCityHex() {
+    /**
+     * Automatically select the city hex of the first province for the current player.
+     * This shows the build menu automatically when a turn starts.
+     */
+    if (!gameBoard || !gameBoard.hexes) {
+        return;
+    }
+    
+    // Get current player color
+    const currentColor = gameBoard.currentPlayerColor;
+    if (!currentColor) {
+        return;
+    }
+    
+    // Find the first city hex of the current player's color
+    let cityHex = null;
+    for (const hex of gameBoard.hexes) {
+        if (hex.color === currentColor && hex.piece === 'city') {
+            cityHex = hex;
+            break;
+        }
+    }
+    
+    if (cityHex) {
+        // Select the hex and show build menu
+        gameBoard.selectedHex = cityHex;
+        gameBoard.selectedHexForBuild = cityHex;
+        
+        // Show build menu and update province status
+        // These functions will fetch province data and verify the hex is in a province
+        showBuildMenu(cityHex);
+        updateProvinceStatus(cityHex);
+        gameBoard.render(); // Re-render to show selection
+        console.log('Auto-selected city hex:', cityHex);
+    } else {
+        console.log('No city hex found for current player');
+    }
 }
 
 // Periodically update game state (polling)
@@ -300,6 +427,8 @@ function endTurn() {
             // Reload game state to reflect the new turn
             loadGameState().then(() => {
                 console.log('Game state reloaded after turn end');
+                // Auto-select city hex for the new current player
+                autoSelectCityHex();
             });
         } else {
             console.error('End turn failed:', data.error);
