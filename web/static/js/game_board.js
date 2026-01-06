@@ -43,7 +43,9 @@ class GameBoard {
         const totalImages = pieces.length;
         
         pieces.forEach(piece => {
-            const imageName = getPieceImage(piece);
+            // Normalize piece name to lowercase for consistent lookup
+            const normalizedPiece = piece.toLowerCase();
+            const imageName = getPieceImage(normalizedPiece);
             if (imageName) {
                 const img = new Image();
                 // When image loads, trigger a re-render if we have hexes to display
@@ -55,13 +57,15 @@ class GameBoard {
                     }
                 };
                 img.onerror = () => {
-                    console.warn(`Failed to load image: ${imageName}`);
+                    console.warn(`Failed to load image: ${imageName} for piece: ${normalizedPiece}`);
                     loadedCount++;
                 };
                 img.src = `/static/assets/original_game_assets/atlas/${imageName}`;
-                this.pieceImages[piece] = img;
+                // Store with normalized (lowercase) key for consistent lookup
+                this.pieceImages[normalizedPiece] = img;
             } else {
                 // If no image name, count it as "loaded" (nothing to load)
+                console.warn(`No image mapping found for piece: ${normalizedPiece}`);
                 loadedCount++;
             }
         });
@@ -250,8 +254,15 @@ class GameBoard {
     }
     
     drawPiece(x, y, pieceType) {
-        const img = this.pieceImages[pieceType];
-        if (!img) return;
+        // Normalize piece type to lowercase for consistent lookup
+        const normalizedPieceType = pieceType ? pieceType.toLowerCase() : null;
+        if (!normalizedPieceType) return;
+        
+        const img = this.pieceImages[normalizedPieceType];
+        if (!img) {
+            console.warn(`Piece image not found for: ${normalizedPieceType} (original: ${pieceType})`);
+            return;
+        }
         
         // Only draw if image is loaded
         if (img.complete && img.naturalHeight !== 0) {

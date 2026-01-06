@@ -591,6 +591,92 @@ class ProvincesManager(IEventListener):
                     largest_province.add_hex(h)
                 largest_province.set_money(largest_province.get_money() + province.get_money())
                 self.remove_province(province)
+            
+            # After merging, ensure only one city remains in the merged province
+            # This matches the original game's checkToRemoveExcessiveCities() logic
+            self._remove_excessive_cities(largest_province)
+
+    def _remove_excessive_cities(self, province: Province) -> None:
+        """
+        Remove excessive cities from a province, keeping only one.
+        
+        This matches the original game's checkToRemoveExcessiveCities() method.
+        When multiple cities exist, removes cities one by one until only one remains.
+        The city with the least adjacent farms is removed first (keeping the one with most farms).
+        """
+        if not province or not self.core_model:
+            return
+        
+        # Find all cities in the province
+        city_hexes = []
+        for hex in province.get_hexes():
+            if hex.piece == PieceType.CITY:
+                city_hexes.append(hex)
+        
+        # Remove cities until only one remains
+        max_iterations = 1000  # Safety limit
+        iteration = 0
+        while len(city_hexes) >= 2 and iteration < max_iterations:
+            iteration += 1
+            
+            # Find the city with the least adjacent farms (to remove it)
+            city_to_remove = self._find_city_with_least_adjacent_farms(city_hexes)
+            if city_to_remove:
+                # Delete the city piece
+                delete_event = self.core_model.events_manager.factory.create_event(EventType.PIECE_DELETE)
+                from core.events import EventPieceDelete
+                if isinstance(delete_event, EventPieceDelete):
+                    delete_event.set_hex(city_to_remove)
+                    self.core_model.events_manager.apply_event(delete_event)
+                
+                # Remove from list
+                city_hexes.remove(city_to_remove)
+            else:
+                # If we can't find a city to remove, just remove the first one
+                if city_hexes:
+                    city_to_remove = city_hexes[0]
+                    delete_event = self.core_model.events_manager.factory.create_event(EventType.PIECE_DELETE)
+                    from core.events import EventPieceDelete
+                    if isinstance(delete_event, EventPieceDelete):
+                        delete_event.set_hex(city_to_remove)
+                        self.core_model.events_manager.apply_event(delete_event)
+                    city_hexes.remove(city_to_remove)
+
+    def _find_city_with_least_adjacent_farms(self, city_hexes: List[Hex]) -> Optional[Hex]:
+        """
+        Find the city with the least number of adjacent friendly farms.
+        
+        This matches the original game's findCityWithLeastAmountOfAdjacentFarms() method.
+        """
+        if not city_hexes:
+            return None
+        
+        best_hex = None
+        min_farms = -1
+        
+        for hex in city_hexes:
+            farm_count = self._count_adjacent_friendly_farms(hex)
+            if best_hex is None or farm_count < min_farms:
+                best_hex = hex
+                min_farms = farm_count
+        
+        return best_hex
+
+    def _count_adjacent_friendly_farms(self, hex: Hex) -> int:
+        """
+        Count the number of adjacent friendly farms.
+        
+        This matches the original game's getNumberOfAdjacentFriendlyFarms() method.
+        """
+        count = 0
+        for adj_hex in hex.adjacent_hexes:
+            # Check if adjacent hex is same color (friendly)
+            if adj_hex.color != hex.color:
+                continue
+            # Check if it's a farm
+            if adj_hex.piece == PieceType.FARM:
+                count += 1
+        return count
 
     def get_listen_priority(self) -> int:
         """Get listener priority."""

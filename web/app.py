@@ -719,5 +719,52 @@ def api_game_undo():
         return jsonify({'success': False, 'error': f'Error during undo: {str(e)}'}), 500
 
 
+@app.route('/api/game/end-turn', methods=['POST'])
+def api_game_end_turn():
+    """End the current player's turn."""
+    session_id = session.get('session_id')
+    if not session_id or session_id not in game_sessions:
+        return jsonify({'success': False, 'error': 'No active game session'}), 404
+    
+    # Mark session as recently used (move to end)
+    game_sessions.move_to_end(session_id)
+    
+    session_data = game_sessions[session_id]
+    game_state = session_data.get('game_state')
+    
+    if game_state is None:
+        return jsonify({'success': False, 'error': 'Game state not available'}), 500
+    
+    # Get current player
+    current_entity = game_state.entities_manager.get_current_entity()
+    if not current_entity:
+        return jsonify({'success': False, 'error': 'No current player'}), 400
+    
+    # Create and execute end turn command
+    from commands.types import EndTurnCommand
+    from commands.executor import CommandExecutor
+    
+    command = EndTurnCommand()
+    executor = CommandExecutor(game_state)
+    success, error = executor.execute(command, current_entity.color)
+    
+    if success:
+        # Update fog of war if enabled
+        if game_state.fog_of_war_manager and game_state.fog_of_war_manager.enabled:
+            game_state.fog_of_war_manager.apply_update()
+        
+        # Get new current player after turn switch
+        new_current_entity = game_state.entities_manager.get_current_entity()
+        new_current_color = new_current_entity.color.value if new_current_entity else None
+        
+        return jsonify({
+            'success': True,
+            'message': 'Turn ended successfully',
+            'new_current_color': new_current_color
+        })
+    else:
+        return jsonify({'success': False, 'error': error or 'Failed to end turn'}), 400
+
+
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)

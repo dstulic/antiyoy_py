@@ -3,23 +3,30 @@ Economics Manager - handles province income and consumption calculations.
 """
 
 from typing import TYPE_CHECKING
+from core.events import IEventListener, AbstractEvent
+from core.enums import EventType
 
 if TYPE_CHECKING:
     from core.game_state import GameState
     from core.province import Province
 
 
-class EconomicsManager:
+class EconomicsManager(IEventListener):
     """
     Manages economic calculations for provinces.
     
     Calculates income, consumption, and profit for provinces based on
     hexes and pieces within them.
+    
+    Also applies profits to province money when turns end.
     """
 
     def __init__(self, game_state: "GameState"):
         """Initialize economics manager."""
         self.game_state = game_state
+        # Register as event listener
+        if game_state and game_state.events_manager:
+            game_state.events_manager.add_listener(self)
 
     def calculate_province_income(self, province: "Province") -> int:
         """
@@ -75,3 +82,56 @@ class EconomicsManager:
         income = self.calculate_province_income(province)
         consumption = self.calculate_province_consumption(province)
         return income - consumption
+    
+    def on_event_validated(self, event: AbstractEvent) -> None:
+        """Called when event is validated."""
+        pass
+    
+    def on_event_applied(self, event: AbstractEvent) -> None:
+        """Called when event is applied."""
+        if event.get_type() == EventType.TURN_END:
+            self._on_turn_end_event_applied()
+    
+    def get_listen_priority(self) -> int:
+        """Get listener priority (lower = higher priority)."""
+        return 8  # Same as original Java implementation
+    
+    def _on_turn_end_event_applied(self) -> None:
+        """Handle turn end event - apply profits to provinces."""
+        self._apply_profits()
+    
+    def _apply_profits(self) -> None:
+        """
+        Apply profits to provinces owned by the current entity.
+        
+        This matches the original game's behavior: profits are applied to provinces
+        owned by the entity whose turn it is NOW (after the turn switch).
+        This is called when a turn ends, and the turn has already switched.
+        
+        Note: Profits are NOT applied on the first lap (lap == 0).
+        """
+        # Don't apply economics on first lap
+        if not self.game_state.turns_manager:
+            return
+        if self.game_state.turns_manager.lap == 0:
+            return
+        
+        # Get the current entity (after turn switch)
+        # This matches the original game's isOwnedByCurrentEntity() logic
+        current_entity = self.game_state.entities_manager.get_current_entity()
+        if not current_entity:
+            return
+        
+        current_color = current_entity.color
+        
+        # Apply profits to all provinces owned by the current entity
+        for province in self.game_state.provinces_manager.provinces:
+            # Check if province is owned by the current entity
+            if province.get_color() != current_color:
+                continue
+            
+            # Calculate and apply profit
+            current_money = province.get_money()
+            profit = self.calculate_province_profit(province)
+            new_money = current_money + profit
+            province.set_money(new_money)

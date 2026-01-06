@@ -278,7 +278,38 @@ function undoAction() {
 
 function endTurn() {
     console.log('End turn');
-    // TODO: Implement end turn functionality
+    
+    fetch('/api/game/end-turn', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            console.log('Turn ended successfully');
+            // Clear any selections and menus
+            if (gameBoard) {
+                gameBoard.selectedHexForBuild = null;
+                gameBoard.cancelPlacementMode();
+            }
+            closeBuildMenu();
+            hideProvinceStatus();
+            
+            // Reload game state to reflect the new turn
+            loadGameState().then(() => {
+                console.log('Game state reloaded after turn end');
+            });
+        } else {
+            console.error('End turn failed:', data.error);
+            alert('Cannot end turn: ' + (data.error || 'Unknown error'));
+        }
+    })
+    .catch(error => {
+        console.error('Error ending turn:', error);
+        alert('Error: ' + error.message);
+    });
 }
 
 function populateBuildMenu(hex) {

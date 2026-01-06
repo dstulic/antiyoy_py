@@ -18,6 +18,12 @@ class GameState(IEventListener):
         self.name = name
         self.hexes: List[Hex] = []
         self.current_unit_id = 0
+        
+        # Store original level code for deterministic seed generation
+        self._original_level_code: Optional[str] = None
+        
+        # Store RNG state for save/load
+        self._rng_state: Optional[tuple] = None
 
         # Initialize managers
         self.events_manager = EventsManager(self)
@@ -39,11 +45,18 @@ class GameState(IEventListener):
         from core.undo_manager import UndoManager
         self.undo_manager = UndoManager(self)
         
+        # Death manager - handles unit death when provinces go bankrupt
+        from core.death_manager import DeathManager
+        self.death_manager = DeathManager(self)
+        
+        # Tree manager - handles tree spawning and grave processing
+        from core.tree_manager import TreeManager
+        self.tree_manager = TreeManager(self)
+        
         # Placeholder managers (to be implemented later)
         self.move_zone_manager = None
         self.readiness_manager = None
         self.construction_manager = None
-        self.death_manager = None
         self.city_manager = None
         self.diplomacy_manager = None
         self.letters_manager = None
@@ -172,6 +185,32 @@ class GameState(IEventListener):
         if self.ruleset:
             return f"def {self.ruleset.get_version_code()}"
         return "def 1"
+    
+    def get_rng_state(self) -> Optional[tuple]:
+        """
+        Get the current RNG state from all managers that use random numbers.
+        
+        Returns:
+            RNG state tuple, or None if no RNG state available
+        """
+        # Get RNG state from tree manager (primary source for game randomness)
+        if hasattr(self, 'tree_manager') and self.tree_manager and hasattr(self.tree_manager, 'random'):
+            return self.tree_manager.random.getstate()
+        return None
+    
+    def set_rng_state(self, state: tuple) -> None:
+        """
+        Set the RNG state for all managers that use random numbers.
+        
+        Args:
+            state: RNG state tuple from random.getstate()
+        """
+        # Set RNG state in tree manager
+        if hasattr(self, 'tree_manager') and self.tree_manager and hasattr(self.tree_manager, 'random'):
+            self.tree_manager.random.setstate(state)
+        
+        # Store in game state for persistence
+        self._rng_state = state
     
     def get_hexes_for_player(self, player_color: Optional[HColor] = None) -> List[Hex]:
         """

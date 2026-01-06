@@ -14,6 +14,7 @@ from save_load.format import (
     SECTION_MAIL_BASKET,
     SECTION_FOG,
     SECTION_CORE_INIT,
+    SECTION_RNG_STATE,
 )
 from core.game_state import GameState
 from core.enums import HColor, PieceType, RulesType, EntityType
@@ -77,6 +78,9 @@ class GameStateDecoder:
         campaign_level_index = -1
         
         try:
+            # Store original level code for deterministic seed generation
+            game_state._original_level_code = level_code
+            
             # Decode campaign level index first
             campaign_level_index = self._decode_campaign_level_index(level_code)
             
@@ -92,6 +96,19 @@ class GameStateDecoder:
             self._decode_diplomacy(game_state, level_code)
             self._decode_mail_basket(game_state, level_code)
             self._decode_fog(game_state, level_code)
+            self._decode_rng_state(game_state, level_code)
+            
+            # Reinitialize TreeManager RNG with correct seed or restore saved state
+            if hasattr(game_state, 'tree_manager') and game_state.tree_manager:
+                if game_state._rng_state:
+                    # Restore saved RNG state
+                    game_state.tree_manager.random.setstate(game_state._rng_state)
+                else:
+                    # Reinitialize with deterministic seed from original level code
+                    from core.rng_utils import get_deterministic_seed
+                    import random
+                    seed = get_deterministic_seed(game_state._original_level_code)
+                    game_state.tree_manager.random = random.Random(seed)
             
             return game_state, campaign_level_index
         except Exception as e:
@@ -335,6 +352,26 @@ class GameStateDecoder:
             source_clean = source.strip().rstrip(',').lower()
             enabled = (source_clean == "true")
             game_state.fog_of_war_manager.set_enabled(enabled)
+    
+    def _decode_rng_state(self, game_state: GameState, level_code: str) -> None:
+        """Decode RNG state section."""
+        import pickle
+        import base64
+        
+        source = get_section(level_code, SECTION_RNG_STATE)
+        if not source or source == "-":
+            return
+        
+        try:
+            # Decode base64 string back to bytes
+            rng_state_bytes = base64.b64decode(source)
+            # Unpickle the RNG state tuple
+            rng_state = pickle.loads(rng_state_bytes)
+            # Store in game state
+            game_state._rng_state = rng_state
+        except Exception as e:
+            print(f"Warning: Failed to decode RNG state: {e}")
+            # If decoding fails, RNG will use seed from original level code
     
     def _decode_campaign_level_index(self, level_code: str) -> int:
         """Decode campaign level index."""

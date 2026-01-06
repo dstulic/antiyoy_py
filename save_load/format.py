@@ -25,6 +25,7 @@ SECTION_STARTING_PROVINCES = "starting_provinces"
 SECTION_EDITOR = "editor"
 SECTION_CAMPAIGN = "campaign"
 SECTION_PAUSE_NAME = "pause_name"
+SECTION_RNG_STATE = "rng_state"
 
 
 def get_section(level_code: str, section_name: str) -> Optional[str]:

@@ -1,10 +1,17 @@
 """Unit tests for core/economics_manager.py."""
 
+import sys
+import os
+
+# Add parent directory to path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import pytest
 from core.economics_manager import EconomicsManager
 from core.province import Province
 from core.hex import Hex
-from core.enums import HColor, PieceType
+from core.enums import HColor, PieceType, EventType, EntityType
+from core.events import EventTurnEnd, EventsManager, EventsFactory
 from typing import Optional
 
 
@@ -36,12 +43,91 @@ class MockRuleset:
         return consumption_map.get(piece_type, 0)
 
 
+class MockTurnsManager:
+    """Mock turns manager for testing."""
+    
+    def __init__(self, lap=0, turn_index=0, game_state=None):
+        """Initialize mock turns manager."""
+        self.lap = lap
+        self.turn_index = turn_index
+        self.core_model = game_state  # Store reference to game state
+    
+    def do_switch_turn_index(self):
+        """Switch to next turn."""
+        # Check if at end of lap (matching real implementation)
+        if self.is_turn_index_in_end_of_lap():
+            self.turn_index = 0
+            self.lap += 1
+        else:
+            self.turn_index += 1
+    
+    def is_turn_index_in_end_of_lap(self) -> bool:
+        """Check if turn index is at end of lap."""
+        if (
+            self.core_model
+            and self.core_model.entities_manager
+            and self.core_model.entities_manager.entities
+        ):
+            return self.turn_index == len(self.core_model.entities_manager.entities) - 1
+        return False
+
+
+class MockEntitiesManager:
+    """Mock entities manager for testing."""
+    
+    def __init__(self, current_color: HColor, game_state=None):
+        """Initialize mock entities manager."""
+        from core.player_entity import PlayerEntity
+        self.entities = [
+            PlayerEntity(None, EntityType.HUMAN, HColor.RED),
+            PlayerEntity(None, EntityType.HUMAN, HColor.BLUE)
+        ]
+        self.core_model = game_state  # Store reference to game state
+        # Initialize turn_index based on current_color
+        if game_state and game_state.turns_manager:
+            game_state.turns_manager.turn_index = 0 if current_color == HColor.RED else 1
+    
+    def get_current_entity(self):
+        """Get current entity based on turn index (matching real implementation)."""
+        if (
+            not self.entities
+            or not self.core_model
+            or not self.core_model.turns_manager
+        ):
+            return None
+        turn_index = self.core_model.turns_manager.turn_index
+        if 0 <= turn_index < len(self.entities):
+            return self.entities[turn_index]
+        return None
+    
+    def get_current_color(self) -> HColor:
+        """Get current color."""
+        entity = self.get_current_entity()
+        return entity.color if entity else HColor.GRAY
+
+
+class MockProvincesManager:
+    """Mock provinces manager for testing."""
+    
+    def __init__(self, provinces):
+        """Initialize mock provinces manager."""
+        self.provinces = provinces
+
+
 class MockGameState:
     """Mock game state for testing."""
 
-    def __init__(self, ruleset=None):
+    def __init__(self, ruleset=None, lap=0, turn_index=0, current_color=HColor.RED, provinces=None):
         """Initialize mock game state."""
         self.ruleset = ruleset
+        # Create turns manager with reference to self (needed for is_turn_index_in_end_of_lap)
+        self.turns_manager = MockTurnsManager(lap=lap, turn_index=turn_index, game_state=self)
+        # Create entities manager with reference to self (needed for get_current_entity)
+        self.entities_manager = MockEntitiesManager(current_color=current_color, game_state=self)
+        self.provinces_manager = MockProvincesManager(provinces=provinces or [])
+        # Create events manager
+        self.events_manager = EventsManager(self)
+        self.events_manager.factory = EventsFactory(self.events_manager)
 
 
 class TestEconomicsManager:
@@ -805,3 +891,241 @@ class TestEconomicsManager:
         # Income: 75 + 30 + 5 + 2 = 112
         # Consumption: 2
         assert profit == 110  # 112 - 2 = 110
+    
+    def test_profit_applied_on_turn_end(self):
+        """Test that profits are applied to province money when turn ends (matching original game)."""
+        ruleset = MockRuleset()
+        
+        # Create a blue province (will be current after red's turn ends)
+        province = Province()
+        hex1 = Hex(coordinate1=0, coordinate2=0, color=HColor.BLUE)
+        hex1.piece = PieceType.FARM  # 5 income
+        province.add_hex(hex1)
+        hex2 = Hex(coordinate1=1, coordinate2=0, color=HColor.BLUE)
+        hex2.piece = PieceType.PEASANT  # 1 income, 2 consumption
+        province.add_hex(hex2)
+        hex3 = Hex(coordinate1=2, coordinate2=0, color=HColor.BLUE)
+        # Empty hex - 1 income
+        province.add_hex(hex3)
+        
+        # Set initial money
+        province.set_money(100)
+        
+        # Create game state with RED as current (turn_index=0)
+        # After turn end, BLUE will be current (turn_index=1)
+        game_state = MockGameState(
+            ruleset=ruleset,
+            lap=1,  # Not first lap
+            turn_index=0,  # Red's turn
+            current_color=HColor.RED,
+            provinces=[province]
+        )
+        
+        manager = EconomicsManager(game_state)
+        
+        # Calculate expected profit for blue province
+        # Income: 5 (farm) + 1 (peasant) + 1 (empty) = 7
+        # Consumption: 2 (peasant)
+        # Profit: 7 - 2 = 5
+        
+        initial_money = province.get_money()
+        expected_profit = manager.calculate_province_profit(province)
+        
+        # Apply turn end event (switches from red to blue)
+        event = EventTurnEnd()
+        event.set_core_model(game_state)
+        game_state.events_manager.apply_event(event)
+        
+        # Verify money was updated (blue is now current, so blue gets profit)
+        new_money = province.get_money()
+        assert new_money == initial_money + expected_profit
+        assert new_money == 100 + 5  # 105
+    
+    def test_profit_not_applied_on_first_lap(self):
+        """Test that profits are NOT applied on the first lap (lap == 0)."""
+        ruleset = MockRuleset()
+        
+        province = Province()
+        hex1 = Hex(coordinate1=0, coordinate2=0, color=HColor.RED)
+        hex1.piece = PieceType.FARM  # 5 income
+        province.add_hex(hex1)
+        province.set_money(100)
+        
+        # Create game state with lap == 0 (first lap)
+        game_state = MockGameState(
+            ruleset=ruleset,
+            lap=0,  # First lap - profits should NOT be applied
+            turn_index=0,
+            current_color=HColor.RED,
+            provinces=[province]
+        )
+        
+        manager = EconomicsManager(game_state)
+        initial_money = province.get_money()
+        
+        # Apply turn end event
+        event = EventTurnEnd()
+        event.set_core_model(game_state)
+        game_state.events_manager.apply_event(event)
+        
+        # Verify money was NOT updated (still 100)
+        assert province.get_money() == initial_money
+        assert province.get_money() == 100
+    
+    def test_profit_only_applied_to_current_entity_provinces(self):
+        """Test that profits are only applied to provinces owned by current entity (after turn switch)."""
+        ruleset = MockRuleset()
+        
+        # Create two provinces - one red, one blue
+        red_province = Province()
+        hex1 = Hex(coordinate1=0, coordinate2=0, color=HColor.RED)
+        hex1.piece = PieceType.FARM  # 5 income
+        red_province.add_hex(hex1)
+        red_province.set_money(100)
+        
+        blue_province = Province()
+        hex2 = Hex(coordinate1=10, coordinate2=10, color=HColor.BLUE)
+        hex2.piece = PieceType.FARM  # 5 income
+        blue_province.add_hex(hex2)
+        blue_province.set_money(50)
+        
+        # Create game state with RED as current (turn_index=0)
+        # After turn end, BLUE will be current (turn_index=1)
+        game_state = MockGameState(
+            ruleset=ruleset,
+            lap=1,
+            turn_index=0,  # Red's turn
+            current_color=HColor.RED,
+            provinces=[red_province, blue_province]
+        )
+        
+        manager = EconomicsManager(game_state)
+        
+        # Apply turn end event (switches from red to blue)
+        event = EventTurnEnd()
+        event.set_core_model(game_state)
+        game_state.events_manager.apply_event(event)
+        
+        # After turn switch, blue is now current, so blue gets profit
+        # Blue province: 5 income - 0 consumption = 5 profit
+        assert blue_province.get_money() == 50 + 5  # 55
+        
+        # Red province should remain unchanged (red's turn just ended)
+        assert red_province.get_money() == 100
+    
+    def test_profit_applied_to_multiple_provinces(self):
+        """Test that profits are applied to all provinces owned by current entity (after turn switch)."""
+        ruleset = MockRuleset()
+        
+        # Create two blue provinces (will be current after red's turn ends)
+        province1 = Province()
+        hex1 = Hex(coordinate1=0, coordinate2=0, color=HColor.BLUE)
+        hex1.piece = PieceType.FARM  # 5 income
+        province1.add_hex(hex1)
+        province1.set_money(100)
+        
+        province2 = Province()
+        hex2 = Hex(coordinate1=10, coordinate2=10, color=HColor.BLUE)
+        hex2.piece = PieceType.TOWER  # 1 income, 1 consumption
+        province2.add_hex(hex2)
+        province2.set_money(50)
+        
+        # Create game state with RED as current (turn_index=0)
+        # After turn end, BLUE will be current (turn_index=1)
+        game_state = MockGameState(
+            ruleset=ruleset,
+            lap=1,
+            turn_index=0,  # Red's turn
+            current_color=HColor.RED,
+            provinces=[province1, province2]
+        )
+        
+        manager = EconomicsManager(game_state)
+        
+        # Apply turn end event (switches from red to blue)
+        event = EventTurnEnd()
+        event.set_core_model(game_state)
+        game_state.events_manager.apply_event(event)
+        
+        # After turn switch, blue is now current, so both blue provinces get profit
+        # Province1: 5 income - 0 consumption = 5 profit
+        assert province1.get_money() == 100 + 5  # 105
+        
+        # Province2: 1 income - 1 consumption = 0 profit
+        assert province2.get_money() == 50 + 0  # 50
+    
+    def test_negative_profit_reduces_money(self):
+        """Test that negative profit (consumption > income) reduces province money."""
+        ruleset = MockRuleset()
+        
+        # Create blue province with high consumption (will be current after red's turn ends)
+        province = Province()
+        hex1 = Hex(coordinate1=0, coordinate2=0, color=HColor.BLUE)
+        hex1.piece = PieceType.KNIGHT  # 1 income, 36 consumption
+        province.add_hex(hex1)
+        province.set_money(100)
+        
+        # Create game state with RED as current (turn_index=0)
+        # After turn end, BLUE will be current (turn_index=1)
+        game_state = MockGameState(
+            ruleset=ruleset,
+            lap=1,
+            turn_index=0,  # Red's turn
+            current_color=HColor.RED,
+            provinces=[province]
+        )
+        
+        manager = EconomicsManager(game_state)
+        
+        # Expected profit: 1 - 36 = -35
+        expected_profit = manager.calculate_province_profit(province)
+        assert expected_profit == -35
+        
+        # Apply turn end event (switches from red to blue)
+        event = EventTurnEnd()
+        event.set_core_model(game_state)
+        game_state.events_manager.apply_event(event)
+        
+        # Verify money was reduced (blue is now current, so blue gets profit applied)
+        assert province.get_money() == 100 + (-35)  # 65
+    
+    def test_profit_applied_after_turn_switch(self):
+        """Test that profits are applied to the entity whose turn is now starting (matching original game)."""
+        ruleset = MockRuleset()
+        
+        # Create red and blue provinces
+        red_province = Province()
+        hex1 = Hex(coordinate1=0, coordinate2=0, color=HColor.RED)
+        hex1.piece = PieceType.FARM  # 5 income
+        red_province.add_hex(hex1)
+        red_province.set_money(100)
+        
+        blue_province = Province()
+        hex2 = Hex(coordinate1=10, coordinate2=10, color=HColor.BLUE)
+        hex2.piece = PieceType.FARM  # 5 income
+        blue_province.add_hex(hex2)
+        blue_province.set_money(50)
+        
+        # Create game state with RED as current (turn_index=0)
+        game_state = MockGameState(
+            ruleset=ruleset,
+            lap=1,
+            turn_index=0,  # Red's turn
+            current_color=HColor.RED,
+            provinces=[red_province, blue_province]
+        )
+        
+        manager = EconomicsManager(game_state)
+        
+        # Apply turn end event (this will switch to blue)
+        event = EventTurnEnd()
+        event.set_core_model(game_state)
+        game_state.events_manager.apply_event(event)
+        
+        # After turn switch, blue is now current (matching original game's isOwnedByCurrentEntity logic)
+        # So blue province should get profit applied
+        # Blue province: 5 income - 0 consumption = 5 profit
+        assert blue_province.get_money() == 50 + 5  # 55
+        
+        # Red province should remain unchanged (red's turn just ended)
+        assert red_province.get_money() == 100
