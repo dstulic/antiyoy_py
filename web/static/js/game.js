@@ -241,7 +241,39 @@ function closeBuildMenu() {
 // Action button functions
 function undoAction() {
     console.log('Undo action');
-    // TODO: Implement undo functionality
+    
+    fetch('/api/game/undo', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            console.log('Undo successful');
+            // Reload game state to reflect the undo
+            loadGameState().then(() => {
+                // If we had a selected hex, try to restore it
+                if (gameBoard && gameBoard.selectedHexForBuild) {
+                    const hex = gameBoard.selectedHexForBuild;
+                    updateProvinceStatus(hex);
+                    populateBuildMenu(hex);
+                } else {
+                    // Clear selection and menus
+                    closeBuildMenu();
+                    hideProvinceStatus();
+                }
+            });
+        } else {
+            console.error('Undo failed:', data.error);
+            alert('Cannot undo: ' + (data.error || 'Unknown error'));
+        }
+    })
+    .catch(error => {
+        console.error('Error during undo:', error);
+        alert('Error: ' + error.message);
+    });
 }
 
 function endTurn() {

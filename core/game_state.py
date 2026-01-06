@@ -35,6 +35,10 @@ class GameState(IEventListener):
         from core.fog_of_war import FogOfWarManager
         self.fog_of_war_manager = FogOfWarManager(self)
         
+        # Initialize undo manager
+        from core.undo_manager import UndoManager
+        self.undo_manager = UndoManager(self)
+        
         # Placeholder managers (to be implemented later)
         self.move_zone_manager = None
         self.readiness_manager = None

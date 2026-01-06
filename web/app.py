@@ -684,5 +684,40 @@ def api_game_save():
     return jsonify({'success': True, 'message': 'Game saved'})
 
 
+@app.route('/api/game/undo', methods=['POST'])
+def api_game_undo():
+    """Undo the last action."""
+    session_id = session.get('session_id')
+    if not session_id or session_id not in game_sessions:
+        return jsonify({'success': False, 'error': 'No active game session'}), 404
+    
+    # Mark session as recently used (move to end)
+    game_sessions.move_to_end(session_id)
+    
+    session_data = game_sessions[session_id]
+    game_state = session_data.get('game_state')
+    
+    if game_state is None:
+        return jsonify({'success': False, 'error': 'Game state not available'}), 500
+    
+    # Check if undo is possible
+    if not hasattr(game_state, 'undo_manager') or not game_state.undo_manager.can_undo():
+        return jsonify({'success': False, 'error': 'Nothing to undo'}), 400
+    
+    # Perform undo
+    try:
+        success = game_state.undo_manager.undo()
+        if success:
+            # Update fog of war if enabled
+            if game_state.fog_of_war_manager and game_state.fog_of_war_manager.enabled:
+                game_state.fog_of_war_manager.apply_update()
+            
+            return jsonify({'success': True, 'message': 'Action undone'})
+        else:
+            return jsonify({'success': False, 'error': 'Failed to undo action'}), 500
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'Error during undo: {str(e)}'}), 500
+
+
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
