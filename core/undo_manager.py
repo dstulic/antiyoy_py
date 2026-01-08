@@ -99,7 +99,7 @@ class UndoManager(IEventListener):
             
             # Copy the restored state into the current game state
             # We need to copy all the important data
-            self._restore_game_state(restored_state)
+            self._restore_game_state(restored_state, undo_item)
             
             # Notify game state that undo was applied
             if hasattr(self.game_state, "on_undo_applied"):
@@ -110,7 +110,7 @@ class UndoManager(IEventListener):
             print(f"Error during undo: {e}")
             return False
     
-    def _restore_game_state(self, restored_state) -> None:
+    def _restore_game_state(self, restored_state, undo_item) -> None:
         """Restore game state from a restored state."""
         # Create a coordinate map for quick lookup
         current_hex_map = {}
@@ -176,6 +176,15 @@ class UndoManager(IEventListener):
         # Restore turn info
         self.game_state.turns_manager.turn_index = restored_state.turns_manager.turn_index
         self.game_state.turns_manager.lap = restored_state.turns_manager.lap
+        
+        # Restore readiness state
+        if hasattr(restored_state, 'readiness_manager') and restored_state.readiness_manager:
+            if hasattr(self.game_state, 'readiness_manager') and self.game_state.readiness_manager:
+                # Decode readiness from the saved level code
+                from save_load.format import get_section, SECTION_READY
+                readiness_source = get_section(undo_item.level_code, SECTION_READY)
+                if readiness_source:
+                    self.game_state.readiness_manager.decode(readiness_source)
         
         # Restore fog of war state
         if hasattr(restored_state, 'fog_of_war_manager') and restored_state.fog_of_war_manager:

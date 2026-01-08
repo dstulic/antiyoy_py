@@ -64,6 +64,10 @@
                     <span class="menu-icon">←</span>
                     Exit
                 </button>
+                <button class="menu-item" id="soundToggleBtn" onclick="toggleSounds()">
+                    <span class="menu-icon">🔇</span>
+                    <span id="soundToggleText">Enable Sounds</span>
+                </button>
             </div>
         </div>
         
@@ -79,6 +83,7 @@
         const levelIndex = {{ level_index }};
     </script>
     <script src="{{ url_for('static', filename='js/hex_grid.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/animations.js') }}"></script>
     <script src="{{ url_for('static', filename='js/game_board.js') }}"></script>
     <script src="{{ url_for('static', filename='js/game.js') }}"></script>
 </body>

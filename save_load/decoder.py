@@ -90,6 +90,7 @@ class GameStateDecoder:
             self._decode_core_current_ids(game_state, level_code)
             self._decode_player_entities(game_state, level_code)
             self._decode_provinces(game_state, level_code)
+            self._decode_ready(game_state, level_code)
             self._decode_rules(game_state, level_code)
             self._decode_turn(game_state, level_code)
             # Optional sections
@@ -310,6 +311,14 @@ class GameStateDecoder:
                 province.set_id(matched_data["id"])
                 province.set_money(matched_data["money"])
                 province.set_city_name(matched_data["city_name"])
+    
+    def _decode_ready(self, game_state: GameState, level_code: str) -> None:
+        """Decode readiness state."""
+        from save_load.format import get_section, SECTION_READY
+        source = get_section(level_code, SECTION_READY)
+        if not source:
+            return
+        game_state.readiness_manager.decode(source)
 
     def _decode_rules(self, game_state: GameState, level_code: str) -> None:
         """Decode rules section."""

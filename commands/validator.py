@@ -40,6 +40,11 @@ class CommandValidator:
         Returns:
             Tuple of (is_valid, error_message)
         """
+        # Check if game has ended - no more turns allowed
+        if hasattr(self.game_state, 'game_end_manager') and self.game_state.game_end_manager:
+            if not self.game_state.game_end_manager.can_make_turn():
+                return False, "Game has ended"
+        
         # Check if it's the player's turn (except for end_turn which can be checked separately)
         if command.command_type != "end_turn":
             if not self._is_player_turn(player_color):

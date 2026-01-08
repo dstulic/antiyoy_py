@@ -284,6 +284,16 @@ class PrwCluster:
     def __init__(self):
         """Initialize cluster."""
         self.hexes: List[Hex] = []
+    
+    def has_city(self) -> bool:
+        """Check if cluster has a city."""
+        from core.enums import PieceType
+        return any(hex.piece == PieceType.CITY for hex in self.hexes)
+    
+    def count_farms(self) -> int:
+        """Count farms in cluster."""
+        from core.enums import PieceType
+        return sum(1 for hex in self.hexes if hex.piece == PieceType.FARM)
 
 
 class ProvincesReductionWorker:
@@ -334,25 +344,15 @@ class ProvincesReductionWorker:
     def _update_clusters(self) -> None:
         """Update clusters after color change."""
         self.clusters.clear()
-        if not self.previous_color:
+        if not self.previous_color or not self.modified_hex:
             return
-        hexes = (
-            self.provinces_manager.core_model.hexes
-            if self.provinces_manager.core_model
-            else []
-        )
-        for hex in hexes:
-            if hex.flag:
+        # Only look at adjacent hexes to the modified hex (matching Java implementation)
+        for adjacent_hex in self.modified_hex.adjacent_hexes:
+            if adjacent_hex.flag:
                 continue
-            if hex.color != self.previous_color:
+            if adjacent_hex.color != self.previous_color:
                 continue
-            if not hex.is_adjacent_to_hexes_of_same_color():
-                continue
-            cluster = PrwCluster()
-            self.current_cluster = cluster
-            self.wave_worker.apply(hex)
-            if len(cluster.hexes) > 0:
-                self.clusters.append(cluster)
+            self._add_cluster(adjacent_hex)
 
     def _handle_simple_situations(self) -> None:
         """Handle simple situations (no split, single hex removal)."""
@@ -361,20 +361,27 @@ class ProvincesReductionWorker:
                 self.provinces_manager.remove_province(self.modified_province)
             return
         if len(self.clusters) == 1:
-            # Single cluster - just update province
-            cluster = self.clusters[0]
-            if self.modified_province:
-                # Remove hexes not in cluster
-                hexes_to_remove = [
-                    h
-                    for h in self.modified_province.get_hexes()
-                    if h not in cluster.hexes
-                ]
-                for h in hexes_to_remove:
-                    self.modified_province.remove_hex(h)
+            # Single cluster - remove single hex
+            self._remove_single_hex()
             return
         # Multiple clusters - handle split
         self._handle_split_situation()
+    
+    def _remove_single_hex(self) -> None:
+        """Remove single hex from province."""
+        if not self.modified_province or not self.modified_hex:
+            return
+        self.modified_province.remove_hex(self.modified_hex)
+        if len(self.modified_province.get_hexes()) < 2:
+            self.provinces_manager.remove_province(self.modified_province)
+    
+    def _add_cluster(self, hex: Hex) -> None:
+        """Add a cluster starting from hex."""
+        cluster = PrwCluster()
+        self.current_cluster = cluster
+        self.wave_worker.apply(hex)
+        if len(cluster.hexes) > 0:
+            self.clusters.append(cluster)
 
     def _handle_split_situation(self) -> None:
         """Handle province split into multiple clusters."""
@@ -383,39 +390,72 @@ class ProvincesReductionWorker:
         self._make_provinces_for_rest_of_clusters()
 
     def _update_successor_cluster(self) -> None:
-        """Update successor cluster (largest or contains most money)."""
-        if not self.modified_province:
-            self.successor_cluster = self.clusters[0] if self.clusters else None
+        """Update successor cluster (city > farms > biggest)."""
+        # Priority 1: Cluster with city
+        self.successor_cluster = self._get_cluster_with_city()
+        if self.successor_cluster is not None:
             return
-        # Find cluster with most hexes from original province
-        best_cluster = None
-        best_count = 0
+        # Priority 2: Cluster with most farms
+        self.successor_cluster = self._get_cluster_with_most_farms()
+        if self.successor_cluster is not None:
+            return
+        # Priority 3: Biggest cluster
+        self.successor_cluster = self._get_biggest_cluster()
+    
+    def _get_cluster_with_city(self) -> Optional[PrwCluster]:
+        """Get cluster with a city."""
         for cluster in self.clusters:
-            count = sum(1 for h in cluster.hexes if self.modified_province.contains(h))
-            if count > best_count:
-                best_count = count
+            if cluster.has_city():
+                return cluster
+        return None
+    
+    def _get_cluster_with_most_farms(self) -> Optional[PrwCluster]:
+        """Get cluster with most farms."""
+        best_cluster = None
+        max_farms = -1
+        for cluster in self.clusters:
+            farms = cluster.count_farms()
+            if best_cluster is None or farms > max_farms:
                 best_cluster = cluster
-        self.successor_cluster = best_cluster or (self.clusters[0] if self.clusters else None)
+                max_farms = farms
+        return best_cluster if max_farms > 0 else None
+    
+    def _get_biggest_cluster(self) -> Optional[PrwCluster]:
+        """Get biggest cluster."""
+        biggest_cluster = None
+        for cluster in self.clusters:
+            if biggest_cluster is None or len(cluster.hexes) > len(biggest_cluster.hexes):
+                biggest_cluster = cluster
+        return biggest_cluster
 
     def _modify_province_to_match_successor_cluster(self) -> None:
         """Modify province to match successor cluster."""
         if not self.modified_province or not self.successor_cluster:
             return
-        # Remove hexes not in successor cluster
+        # Mark hexes in successor cluster
+        for hex in self.modified_province.get_hexes():
+            hex.flag = False
+        for hex in self.successor_cluster.hexes:
+            hex.flag = True
+        # Remove hexes not in successor cluster (iterate backwards to avoid index issues)
         hexes_to_remove = [
             h
             for h in self.modified_province.get_hexes()
-            if h not in self.successor_cluster.hexes
+            if not h.flag
         ]
         for h in hexes_to_remove:
             self.modified_province.remove_hex(h)
+        # Remove province if it has less than 2 hexes
+        if len(self.modified_province.get_hexes()) < 2:
+            self.provinces_manager.remove_province(self.modified_province)
 
     def _make_provinces_for_rest_of_clusters(self) -> None:
         """Create new provinces for remaining clusters."""
         for cluster in self.clusters:
             if cluster == self.successor_cluster:
                 continue
-            if len(cluster.hexes) < 1:
+            # Only create provinces for clusters with at least 2 hexes (matching Java)
+            if len(cluster.hexes) < 2:
                 continue
             province = self.provinces_manager.add_province()
             for hex in cluster.hexes:

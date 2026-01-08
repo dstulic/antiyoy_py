@@ -91,9 +91,9 @@ class GameStateEncoder:
         builder.append(start_section(SECTION_PROVINCES))
         builder.append(game_state.provinces_manager.encode())
         
-        # Ready (readiness manager - placeholder for now)
+        # Ready (readiness manager)
         builder.append(start_section(SECTION_READY))
-        builder.append("-")  # Placeholder
+        builder.append(game_state.readiness_manager.encode())
         
         # Rules
         builder.append(start_section(SECTION_RULES))

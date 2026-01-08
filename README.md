@@ -160,16 +160,6 @@ print(f"Encoded to {len(encoded)} characters")
 
 ## Web Interface
 
-### Setup Assets
-
-Before running the web interface, set up the game assets:
-
-```bash
-cd antiyoy_py/web
-python setup_assets.py
-```
-
-This will create a symlink (or copy on Windows) from the original game assets to the web static directory.
 
 ### Run the Web Server
 
@@ -184,6 +174,11 @@ Or if the virtual environment is activated:
 
 ```bash
 python web/app.py
+```
+
+### Run the server from a cached location - to enable continuous modification of source files.
+```bash
+./run_cached.sh
 ```
 
 The web interface will be available at `http://localhost:5000`

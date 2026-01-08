@@ -39,11 +39,37 @@ function restartGame() {
 }
 
 function saveGame() {
+    // Generate default save name: YY_MM_DD_HH_MM
+    const now = new Date();
+    const year = now.getFullYear().toString().slice(-2);
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const hours = String(now.getHours()).padStart(2, '0');
+    const minutes = String(now.getMinutes()).padStart(2, '0');
+    const defaultName = `${year}_${month}_${day}_${hours}_${minutes}`;
+    
+    // Show save dialog
+    const saveName = prompt('Enter save name:', defaultName);
+    if (saveName === null) {
+        // User cancelled
+        toggleMenu();
+        return;
+    }
+    
+    if (!saveName.trim()) {
+        alert('Save name cannot be empty');
+        toggleMenu();
+        return;
+    }
+    
     fetch('/api/game/save', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
-        }
+        },
+        body: JSON.stringify({
+            save_name: saveName.trim()
+        })
     })
     .then(response => response.json())
     .then(data => {
@@ -65,6 +91,55 @@ function exitGame() {
         window.location.href = '/';
     }
     toggleMenu();
+}
+
+function toggleSounds() {
+    if (!gameBoard || !gameBoard.animationSystem) {
+        return;
+    }
+    
+    const currentState = gameBoard.animationSystem.soundsEnabled;
+    const newState = !currentState;
+    gameBoard.animationSystem.setSoundsEnabled(newState);
+    
+    // Update UI
+    const soundToggleBtn = document.getElementById('soundToggleBtn');
+    const soundToggleText = document.getElementById('soundToggleText');
+    const menuIcon = soundToggleBtn.querySelector('.menu-icon');
+    
+    if (newState) {
+        menuIcon.textContent = '🔊';
+        soundToggleText.textContent = 'Disable Sounds';
+    } else {
+        menuIcon.textContent = '🔇';
+        soundToggleText.textContent = 'Enable Sounds';
+    }
+    
+    toggleMenu();
+}
+
+// Update sound toggle UI on page load
+function updateSoundToggleUI() {
+    if (!gameBoard || !gameBoard.animationSystem) {
+        return;
+    }
+    
+    const soundToggleBtn = document.getElementById('soundToggleBtn');
+    const soundToggleText = document.getElementById('soundToggleText');
+    if (!soundToggleBtn || !soundToggleText) {
+        return;
+    }
+    
+    const menuIcon = soundToggleBtn.querySelector('.menu-icon');
+    const soundsEnabled = gameBoard.animationSystem.soundsEnabled;
+    
+    if (soundsEnabled) {
+        menuIcon.textContent = '🔊';
+        soundToggleText.textContent = 'Disable Sounds';
+    } else {
+        menuIcon.textContent = '🔇';
+        soundToggleText.textContent = 'Enable Sounds';
+    }
 }
 
 // Initialize game when page loads
@@ -132,6 +207,13 @@ function handleUnitSelection(hex) {
         return;
     }
     
+    // Update selected hex to the unit's hex so province status shows the correct province
+    gameBoard.selectedHex = hex;
+    gameBoard.selectedHexForBuild = hex;
+    
+    // Update province status to show the province that owns this unit
+    updateProvinceStatus(hex);
+    
     // Fetch valid movement hexes
     fetch('/api/game/valid-movement', {
         method: 'POST',
@@ -183,11 +265,68 @@ function handleUnitMove(startHex, finishHex) {
     .then(data => {
         if (data.success) {
             console.log('Unit moved successfully');
-            // Reload game state to reflect changes
-            loadGameState().then(() => {
-                // Cancel movement mode
-                gameBoard.cancelMovementMode();
-            });
+            
+            // Check if this was a combat move (enemy unit killed or building destroyed)
+            const isCombat = data.combat || false;
+            
+            // Get hex positions for animation
+            const startPos = hexToPixel(startHex.coordinate1, startHex.coordinate2, gameBoard.hexSize * gameBoard.spacingMultiplier);
+            const endPos = hexToPixel(finishHex.coordinate1, finishHex.coordinate2, gameBoard.hexSize * gameBoard.spacingMultiplier);
+            
+            // Apply transform to get screen coordinates
+            const startX = (startPos.x * gameBoard.scale) + gameBoard.offsetX;
+            const startY = (startPos.y * gameBoard.scale) + gameBoard.offsetY;
+            const endX = (endPos.x * gameBoard.scale) + gameBoard.offsetX;
+            const endY = (endPos.y * gameBoard.scale) + gameBoard.offsetY;
+            
+            // Check if action is visible (not covered by fog of war)
+            const isVisible = isActionVisible(finishHex, gameBoard.currentPlayerColor, data);
+            
+            // Add unit movement animation
+            if (gameBoard.animationSystem && isVisible) {
+                gameBoard.animationSystem.addUnitMoveAnimation(
+                    startX, startY, endX, endY, 
+                    startHex.piece, 
+                    {coordinate1: startHex.coordinate1, coordinate2: startHex.coordinate2},
+                    {coordinate1: finishHex.coordinate1, coordinate2: finishHex.coordinate2},
+                    isVisible, isCombat
+                );
+                // Start animation loop if not already running
+                gameBoard.startAnimationLoop();
+            }
+            
+            // Calculate animation duration for the delay
+            const dx = endX - startX;
+            const dy = endY - startY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            const speed = 0.8; // pixels per millisecond (must match animation speed)
+            const animationDuration = Math.max(150, Math.ceil(distance / speed));
+            
+            // Reload game state to reflect changes (with delay to allow animation to play)
+            setTimeout(() => {
+                loadGameState().then(() => {
+                    // Cancel movement mode
+                    gameBoard.cancelMovementMode();
+                    
+                    // Update province status if we have a selected province hex
+                    // The move might have captured a gray hex, changing the province income
+                    if (gameBoard && (gameBoard.selectedHex || gameBoard.selectedHexForBuild)) {
+                        const selectedHex = gameBoard.selectedHex || gameBoard.selectedHexForBuild;
+                        // Find the updated hex in the new game state
+                        const updatedHex = gameBoard.hexes.find(h => 
+                            h.coordinate1 === selectedHex.coordinate1 && 
+                            h.coordinate2 === selectedHex.coordinate2
+                        );
+                        if (updatedHex) {
+                            // Update the selected hex reference
+                            gameBoard.selectedHex = updatedHex;
+                            gameBoard.selectedHexForBuild = updatedHex;
+                            // Update province status to reflect new income/consumption
+                            updateProvinceStatus(updatedHex);
+                        }
+                    }
+                });
+            }, animationDuration); // Wait for animation to complete
         } else {
             console.error('Failed to move unit:', data.error);
             alert('Failed to move unit: ' + (data.error || 'Unknown error'));
@@ -216,7 +355,10 @@ function initializeGameBoard() {
     };
     
     // Load game state and render
-    loadGameState();
+    loadGameState().then(() => {
+        // Update sound toggle UI after game board is initialized
+        updateSoundToggleUI();
+    });
 }
 
 function loadGameState() {
@@ -224,11 +366,29 @@ function loadGameState() {
         .then(response => response.json())
         .then(data => {
             if (data.success && data.hexes) {
+                // Update hexes first (animations will stay visible during this)
                 gameBoard.setHexes(data.hexes);
                 // Set current player color for selection filtering
                 if (data.current_color) {
+                    console.log('loadGameState: Setting current player color to:', data.current_color);
                     gameBoard.setCurrentPlayerColor(data.current_color);
+                } else {
+                    console.log('loadGameState: No current_color in response');
                 }
+                
+                // Clear completed animations AFTER hexes are updated (seamless transition)
+                // Use a small delay to ensure the animation loop has rendered the updated hexes
+                setTimeout(() => {
+                    if (gameBoard.animationSystem) {
+                        gameBoard.animationSystem.clearCompletedAnimations();
+                        // Stop animation loop if no more animations
+                        if (gameBoard.animationSystem.animations.length === 0) {
+                            gameBoard._animationLoopRunning = false;
+                        }
+                        // Re-render to show final state without animations
+                        gameBoard.render();
+                    }
+                }, 50); // Small delay to ensure seamless transition
             } else {
                 console.error('Failed to load game state:', data);
             }
@@ -246,18 +406,24 @@ function autoSelectCityHex() {
      * This shows the build menu automatically when a turn starts.
      */
     if (!gameBoard || !gameBoard.hexes) {
+        console.log('autoSelectCityHex: gameBoard or hexes not available');
         return;
     }
     
     // Get current player color
     const currentColor = gameBoard.currentPlayerColor;
     if (!currentColor) {
+        console.log('autoSelectCityHex: currentPlayerColor not set');
         return;
     }
+    
+    console.log('autoSelectCityHex: Looking for city hex with color:', currentColor);
+    console.log('autoSelectCityHex: Available hexes:', gameBoard.hexes.length);
     
     // Find the first city hex of the current player's color
     let cityHex = null;
     for (const hex of gameBoard.hexes) {
+        console.log('autoSelectCityHex: Checking hex:', hex.coordinate1, hex.coordinate2, 'color:', hex.color, 'piece:', hex.piece);
         if (hex.color === currentColor && hex.piece === 'city') {
             cityHex = hex;
             break;
@@ -271,12 +437,25 @@ function autoSelectCityHex() {
         
         // Show build menu and update province status
         // These functions will fetch province data and verify the hex is in a province
+        console.log('autoSelectCityHex: Found city hex, showing build menu');
         showBuildMenu(cityHex);
         updateProvinceStatus(cityHex);
         gameBoard.render(); // Re-render to show selection
         console.log('Auto-selected city hex:', cityHex);
     } else {
-        console.log('No city hex found for current player');
+        console.log('No city hex found for current player. Current color:', currentColor);
+        // Try to find any hex owned by the current player as fallback
+        for (const hex of gameBoard.hexes) {
+            if (hex.color === currentColor) {
+                console.log('autoSelectCityHex: Found fallback hex (not a city):', hex);
+                gameBoard.selectedHex = hex;
+                gameBoard.selectedHexForBuild = hex;
+                showBuildMenu(hex);
+                updateProvinceStatus(hex);
+                gameBoard.render();
+                break;
+            }
+        }
     }
 }
 
@@ -444,36 +623,62 @@ function endTurn() {
 function populateBuildMenu(hex) {
     // Clear existing items
     const buildMenu = document.getElementById('buildMenu');
-    if (!buildMenu) return;
+    if (!buildMenu) {
+        console.error('populateBuildMenu: buildMenu element not found');
+        return;
+    }
     
     buildMenu.innerHTML = '';
+    
+    console.log('populateBuildMenu: Fetching province data for hex:', hex.coordinate1, hex.coordinate2);
     
     // Fetch province data to get current money
     fetch(`/api/game/province/${hex.coordinate1}/${hex.coordinate2}`)
         .then(response => response.json())
         .then(data => {
+            console.log('populateBuildMenu: Province data received:', data);
             if (!data.success) {
-                console.error('Failed to fetch province data for build menu');
+                console.error('Failed to fetch province data for build menu:', data);
+                // Still show the menu even if province fetch fails (might be a gray hex)
+                buildMenu.style.display = 'flex';
                 return;
             }
             
+            // Check if this is the current player's province
+            const isCurrentPlayerProvince = data.province_color && data.current_color && 
+                                            data.province_color === data.current_color;
+            
+            console.log('populateBuildMenu: isCurrentPlayerProvince:', isCurrentPlayerProvince, 
+                       'province_color:', data.province_color, 'current_color:', data.current_color);
+            
+            // Only show build menu for current player's provinces
+            if (!isCurrentPlayerProvince) {
+                console.log('populateBuildMenu: Not current player province, hiding menu');
+                buildMenu.style.display = 'none';
+                return;
+            }
+            
+            buildMenu.style.display = 'flex';
+            
             const provinceMoney = data.money || 0;
             const pieceCosts = data.piece_costs || {};
+            const pieceMaintenance = data.piece_maintenance || {};
+            const pieceStrength = data.piece_strength || {};
             
             // Create all build items in order: Farms, Towers, Units
             const items = [
-                { type: 'farm', name: 'Farm', cost: pieceCosts['farm'] || 0 },
-                { type: 'tower', name: 'Tower', cost: pieceCosts['tower'] || 0 },
-                { type: 'strong_tower', name: 'Strong Tower', cost: pieceCosts['strong_tower'] || 0 },
-                { type: 'peasant', name: 'Peasant', cost: pieceCosts['peasant'] || 0 },
-                { type: 'spearman', name: 'Spearman', cost: pieceCosts['spearman'] || 0 },
-                { type: 'baron', name: 'Baron', cost: pieceCosts['baron'] || 0 },
-                { type: 'knight', name: 'Knight', cost: pieceCosts['knight'] || 0 }
+                { type: 'farm', name: 'Farm', cost: pieceCosts['farm'] || 0, maintenance: pieceMaintenance['farm'] || 0, strength: pieceStrength['farm'] },
+                { type: 'tower', name: 'Tower', cost: pieceCosts['tower'] || 0, maintenance: pieceMaintenance['tower'] || 0, strength: pieceStrength['tower'] },
+                { type: 'strong_tower', name: 'Strong Tower', cost: pieceCosts['strong_tower'] || 0, maintenance: pieceMaintenance['strong_tower'] || 0, strength: pieceStrength['strong_tower'] },
+                { type: 'peasant', name: 'Peasant', cost: pieceCosts['peasant'] || 0, maintenance: pieceMaintenance['peasant'] || 0, strength: pieceStrength['peasant'] },
+                { type: 'spearman', name: 'Spearman', cost: pieceCosts['spearman'] || 0, maintenance: pieceMaintenance['spearman'] || 0, strength: pieceStrength['spearman'] },
+                { type: 'baron', name: 'Baron', cost: pieceCosts['baron'] || 0, maintenance: pieceMaintenance['baron'] || 0, strength: pieceStrength['baron'] },
+                { type: 'knight', name: 'Knight', cost: pieceCosts['knight'] || 0, maintenance: pieceMaintenance['knight'] || 0, strength: pieceStrength['knight'] }
             ];
             
             items.forEach(itemData => {
                 const canAfford = provinceMoney >= itemData.cost;
-                const buildItem = createBuildItemInline(itemData.type, itemData.name, itemData.cost, canAfford);
+                const buildItem = createBuildItemInline(itemData.type, itemData.name, itemData.cost, itemData.maintenance, itemData.strength, canAfford);
                 buildMenu.appendChild(buildItem);
             });
         })
@@ -483,7 +688,7 @@ function populateBuildMenu(hex) {
         });
 }
 
-function createBuildItemInline(pieceType, displayName, cost, canAfford = true) {
+function createBuildItemInline(pieceType, displayName, cost, maintenance, strength, canAfford = true) {
     const item = document.createElement('div');
     item.className = 'build-item-inline';
     if (!canAfford) {
@@ -518,15 +723,38 @@ function createBuildItemInline(pieceType, displayName, cost, canAfford = true) {
     }
     icon.appendChild(img);
     
+    // Strength on top-right (for units and towers only)
+    if (strength !== null && strength !== undefined && strength > 0) {
+        const strengthEl = document.createElement('div');
+        strengthEl.className = 'build-item-strength';
+        strengthEl.textContent = strength.toString();
+        item.appendChild(strengthEl);
+    }
+    
+    // Cost on bottom-left
     const costEl = document.createElement('div');
     costEl.className = 'build-item-cost';
-    if (!canAfford) {
-        costEl.classList.add('unaffordable-cost');
-    }
     costEl.textContent = cost;
+    item.appendChild(costEl);
+    
+    // Maintenance/income on bottom-right
+    const maintenanceEl = document.createElement('div');
+    maintenanceEl.className = 'build-item-maintenance';
+    if (maintenance > 0) {
+        // Positive value (income for farms)
+        maintenanceEl.textContent = `+${maintenance}`;
+        maintenanceEl.classList.add('income');
+    } else if (maintenance < 0) {
+        // Negative value (maintenance cost)
+        maintenanceEl.textContent = maintenance.toString(); // Already negative, will show as "-2"
+        maintenanceEl.classList.add('maintenance');
+    } else {
+        // Zero or undefined - don't show
+        maintenanceEl.style.display = 'none';
+    }
+    item.appendChild(maintenanceEl);
     
     item.appendChild(icon);
-    item.appendChild(costEl);
     
     return item;
 }
@@ -615,6 +843,24 @@ function handlePlacementBuild(hex, pieceType) {
     .then(data => {
         if (data.success) {
             console.log('Build successful:', data.message);
+            
+            // Get hex position for animation
+            const hexPos = hexToPixel(hex.coordinate1, hex.coordinate2, gameBoard.hexSize * gameBoard.spacingMultiplier);
+            const screenX = (hexPos.x * gameBoard.scale) + gameBoard.offsetX;
+            const screenY = (hexPos.y * gameBoard.scale) + gameBoard.offsetY;
+            
+            // Check if action is visible (not covered by fog of war)
+            const isVisible = isActionVisible(hex, gameBoard.currentPlayerColor, data);
+            
+            // Add money animation for builds (units, farms, towers)
+            if (gameBoard.animationSystem && (pieceType === 'peasant' || pieceType === 'spearman' || 
+                pieceType === 'baron' || pieceType === 'knight' || pieceType === 'farm' || 
+                pieceType === 'tower' || pieceType === 'strong_tower')) {
+                gameBoard.animationSystem.addMoneyAnimation(screenX, screenY, isVisible);
+                // Start animation loop if not already running
+                gameBoard.startAnimationLoop();
+            }
+            
             // Store province hex before reloading (since placement mode will be cancelled)
             const provinceHexToUpdate = provinceHex || (gameBoard && gameBoard.selectedHexForBuild);
             
@@ -676,29 +922,39 @@ function updateProvinceStatus(hex) {
         .then(response => response.json())
         .then(data => {
             if (data.success) {
+                // Check if this is the current player's province
+                const isCurrentPlayerProvince = data.province_color && data.current_color && 
+                                                data.province_color === data.current_color;
+                
                 const statusBar = document.getElementById('statusBar');
                 const statusFunds = document.getElementById('statusFunds');
                 const statusProfit = document.getElementById('statusProfit');
                 const statusCityName = document.getElementById('statusCityName');
                 
                 if (statusBar && statusFunds && statusProfit && statusCityName) {
-                    // Update funds
-                    statusFunds.textContent = data.money || 0;
-                    
-                    // Update profit (income - consumption)
-                    const profit = data.profit || 0;
-                    statusProfit.textContent = profit >= 0 ? `+${profit}` : `${profit}`;
-                    statusProfit.className = 'status-value ' + (profit >= 0 ? 'positive' : 'negative');
-                    
-                    // Update city name (if available)
-                    if (data.city_name) {
-                        statusCityName.textContent = data.city_name;
-                        statusCityName.style.display = 'block';
+                    if (isCurrentPlayerProvince) {
+                        // Show province info for current player
+                        statusFunds.textContent = data.money || 0;
+                        
+                        // Update profit (income - consumption)
+                        const profit = data.profit || 0;
+                        statusProfit.textContent = profit >= 0 ? `+${profit}` : `${profit}`;
+                        statusProfit.className = 'status-value ' + (profit >= 0 ? 'positive' : 'negative');
+                        
+                        // Update city name (if available)
+                        if (data.city_name) {
+                            statusCityName.textContent = data.city_name;
+                            statusCityName.style.display = 'block';
+                        } else {
+                            statusCityName.style.display = 'none';
+                        }
                     } else {
+                        // Hide province info for enemy provinces
+                        statusFunds.textContent = '?';
+                        statusProfit.textContent = '?';
+                        statusProfit.className = 'status-value';
                         statusCityName.style.display = 'none';
                     }
-                    
-                    // Status bar is always visible, just update content
                 }
             } else {
                 hideProvinceStatus();

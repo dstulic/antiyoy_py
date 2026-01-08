@@ -53,6 +53,11 @@ class GameState(IEventListener):
         from core.tree_manager import TreeManager
         self.tree_manager = TreeManager(self)
         
+        # AI manager - handles AI player turns
+        from ai.ai_manager import AIManager
+        from core.enums import Difficulty
+        self.ai_manager = AIManager(self, Difficulty.AVERAGE)
+        
         # Move zone manager - calculates valid movement hexes for units
         from core.move_zone_manager import MoveZoneManager
         self.move_zone_manager = MoveZoneManager(self)
@@ -60,6 +65,11 @@ class GameState(IEventListener):
         # Readiness manager - tracks which units can move this turn
         from core.readiness_manager import ReadinessManager
         self.readiness_manager = ReadinessManager(self)
+        
+        # Game end manager - checks for game end conditions
+        from core.game_end_manager import GameEndManager
+        self.game_end_manager = GameEndManager(self)
+        
         self.construction_manager = None
         self.city_manager = None
         self.diplomacy_manager = None

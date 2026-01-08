@@ -16,8 +16,96 @@
                 <button class="menu-button campaign-button" onclick="window.location.href='/campaign'">
                     Campaign
                 </button>
-                <!-- Future buttons can be added here -->
+                <button class="menu-button load-button" onclick="showLoadGameDialog()">
+                    Load Game
+                </button>
             </div>
+            
+            <!-- Load Game Dialog -->
+            <div id="loadGameDialog" class="dialog-overlay" style="display: none;">
+                <div class="dialog-content">
+                    <div class="dialog-header">
+                        <h2>Load Game</h2>
+                        <button class="dialog-close" onclick="hideLoadGameDialog()">×</button>
+                    </div>
+                    <div class="dialog-body">
+                        <div id="savesList" class="saves-list">
+                            <p>Loading saves...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <script>
+                function showLoadGameDialog() {
+                    const dialog = document.getElementById('loadGameDialog');
+                    dialog.style.display = 'flex';
+                    loadSavesList();
+                }
+                
+                function hideLoadGameDialog() {
+                    const dialog = document.getElementById('loadGameDialog');
+                    dialog.style.display = 'none';
+                }
+                
+                function loadSavesList() {
+                    fetch('/api/game/list-saves')
+                        .then(response => response.json())
+                        .then(data => {
+                            const savesList = document.getElementById('savesList');
+                            if (data.success && data.saves && data.saves.length > 0) {
+                                savesList.innerHTML = '';
+                                data.saves.forEach(save => {
+                                    const saveItem = document.createElement('div');
+                                    saveItem.className = 'save-item';
+                                    saveItem.innerHTML = `
+                                        <div class="save-info">
+                                            <div class="save-name">${save.name}</div>
+                                            <div class="save-date">${save.date}</div>
+                                        </div>
+                                        <button class="save-load-btn" onclick="loadGame('${save.name}')">Load</button>
+                                    `;
+                                    savesList.appendChild(saveItem);
+                                });
+                            } else {
+                                savesList.innerHTML = '<p>No saved games found.</p>';
+                            }
+                        })
+                        .catch(error => {
+                            console.error('Error loading saves:', error);
+                            document.getElementById('savesList').innerHTML = '<p>Error loading saves.</p>';
+                        });
+                }
+                
+                function loadGame(saveName) {
+                    fetch('/api/game/load', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ save_name: saveName })
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            window.location.href = `/game/${data.level_index || 0}`;
+                        } else {
+                            alert('Failed to load game: ' + (data.error || 'Unknown error'));
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error loading game:', error);
+                        alert('Error loading game');
+                    });
+                }
+                
+                // Close dialog when clicking outside
+                document.getElementById('loadGameDialog').addEventListener('click', function(e) {
+                    if (e.target === this) {
+                        hideLoadGameDialog();
+                    }
+                });
+            </script>
         </div>
     </div>
 </body>

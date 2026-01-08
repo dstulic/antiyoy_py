@@ -367,6 +367,8 @@ def api_game_province(coordinate1, coordinate2):
             'profit': 0,
             'city_name': '',
             'piece_costs': {},
+            'piece_maintenance': {},
+            'piece_strength': {},
             'fog': True
         })
     
@@ -380,7 +382,10 @@ def api_game_province(coordinate1, coordinate2):
             'income': 0,
             'consumption': 0,
             'profit': 0,
-            'city_name': ''
+            'city_name': '',
+            'piece_costs': {},
+            'piece_maintenance': {},
+            'piece_strength': {}
         })
     
     # Calculate income, consumption, and profit using economics manager
@@ -394,8 +399,9 @@ def api_game_province(coordinate1, coordinate2):
         consumption = 0
         profit = 0
     
-    # Calculate piece costs for build menu
+    # Calculate piece costs and maintenance/income for build menu
     piece_costs = {}
+    piece_maintenance = {}
     if game_state.ruleset:
         from core.enums import PieceType
         piece_costs = {
@@ -407,6 +413,40 @@ def api_game_province(coordinate1, coordinate2):
             'strong_tower': game_state.ruleset.get_price(province, PieceType.STRONG_TOWER),
             'farm': game_state.ruleset.get_price(province, PieceType.FARM),
         }
+        
+        # Calculate maintenance (consumption) or income for each piece
+        piece_maintenance = {
+            'peasant': -game_state.ruleset.get_consumption(PieceType.PEASANT),  # Negative for cost
+            'spearman': -game_state.ruleset.get_consumption(PieceType.SPEARMAN),
+            'baron': -game_state.ruleset.get_consumption(PieceType.BARON),
+            'knight': -game_state.ruleset.get_consumption(PieceType.KNIGHT),
+            'tower': -game_state.ruleset.get_consumption(PieceType.TOWER),
+            'strong_tower': -game_state.ruleset.get_consumption(PieceType.STRONG_TOWER),
+            'farm': game_state.ruleset.get_hex_income(PieceType.FARM),  # Positive for income
+        }
+        
+        # Calculate strength/defense values for units and towers
+        from core.core_utils import get_strength
+        piece_strength = {
+            'peasant': get_strength(PieceType.PEASANT),
+            'spearman': get_strength(PieceType.SPEARMAN),
+            'baron': get_strength(PieceType.BARON),
+            'knight': get_strength(PieceType.KNIGHT),
+            'tower': game_state.ruleset.get_defense_value(PieceType.TOWER),  # Defense value for towers
+            'strong_tower': game_state.ruleset.get_defense_value(PieceType.STRONG_TOWER),
+            'farm': None,  # Farms don't have strength
+        }
+    
+    # Get province color and current player color for frontend checks
+    province_color_value = None
+    if province:
+        province_color = province.get_color()
+        if province_color:
+            province_color_value = province_color.value if hasattr(province_color, 'value') else str(province_color)
+    
+    current_color_value = None
+    if current_player_color:
+        current_color_value = current_player_color.value if hasattr(current_player_color, 'value') else str(current_player_color)
     
     return jsonify({
         'success': True,
@@ -416,7 +456,11 @@ def api_game_province(coordinate1, coordinate2):
         'consumption': consumption,
         'profit': profit,
         'city_name': province.get_city_name(),
-        'piece_costs': piece_costs
+        'piece_costs': piece_costs,
+        'piece_maintenance': piece_maintenance,  # Negative for cost, positive for income (farms)
+        'piece_strength': piece_strength,  # Strength for units and towers
+        'province_color': province_color_value,
+        'current_color': current_color_value
     })
 
 
@@ -949,6 +993,65 @@ def api_game_end_turn():
         })
     else:
         return jsonify({'success': False, 'error': error or 'Failed to end turn'}), 400
+
+
+@app.route('/api/game/defense-indicators', methods=['POST'])
+def api_game_defense_indicators():
+    """Get defense indicators for a hex (city or tower)."""
+    session_id = session.get('session_id')
+    if not session_id or session_id not in game_sessions:
+        return jsonify({'success': False, 'error': 'No active game session'}), 404
+    
+    session_data = game_sessions[session_id]
+    game_state = session_data.get('game_state')
+    
+    if game_state is None:
+        return jsonify({'success': False, 'error': 'Game state not available'}), 500
+    
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'error': 'No data provided'}), 400
+    
+    from core.enums import PieceType
+    
+    try:
+        coord1 = int(data.get('coordinate1'))
+        coord2 = int(data.get('coordinate2'))
+    except (ValueError, TypeError) as e:
+        return jsonify({'success': False, 'error': f'Invalid parameters: {e}'}), 400
+    
+    hex = game_state.get_hex(coord1, coord2)
+    if not hex:
+        return jsonify({'success': False, 'error': 'Hex not found'}), 404
+    
+    # Only show defense indicators for cities and towers
+    if hex.piece not in (PieceType.CITY, PieceType.TOWER, PieceType.STRONG_TOWER):
+        return jsonify({'success': False, 'error': 'Hex is not a city or tower'}), 400
+    
+    # Get defense values for adjacent hexes in the same province
+    hex_province = hex.get_province()
+    defense_indicators = []
+    
+    for adj_hex in hex.adjacent_hexes:
+        # Only show indicators for hexes in the same province
+        if hex_province:
+            adj_province = adj_hex.get_province()
+            if adj_province != hex_province:
+                continue
+        
+        # Calculate defense value for this adjacent hex
+        defense_value = game_state.ruleset.get_defense_value_hex(adj_hex)
+        
+        defense_indicators.append({
+            'coordinate1': adj_hex.coordinate1,
+            'coordinate2': adj_hex.coordinate2,
+            'defense_value': defense_value
+        })
+    
+    return jsonify({
+        'success': True,
+        'defense_indicators': defense_indicators
+    })
 
 
 if __name__ == '__main__':
