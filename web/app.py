@@ -734,13 +734,190 @@ def api_game_save():
     """Save the current game."""
     session_id = session.get('session_id')
     if not session_id or session_id not in game_sessions:
-        return jsonify({'error': 'No active game session'}), 404
+        return jsonify({'success': False, 'error': 'No active game session'}), 404
     
     # Mark session as recently used (move to end)
     game_sessions.move_to_end(session_id)
     
-    # TODO: Implement save functionality
-    return jsonify({'success': True, 'message': 'Game saved'})
+    session_data = game_sessions[session_id]
+    game_state = session_data.get('game_state')
+    level_index = session_data.get('level_index', 0)
+    
+    if game_state is None:
+        return jsonify({'success': False, 'error': 'Game state not available'}), 500
+    
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'error': 'No data provided'}), 400
+    
+    save_name = data.get('save_name', '').strip()
+    if not save_name:
+        return jsonify({'success': False, 'error': 'Save name is required'}), 400
+    
+    try:
+        # Create saves directory if it doesn't exist
+        saves_dir = PROJECT_ROOT / 'saves'
+        saves_dir.mkdir(exist_ok=True)
+        
+        # Check if save with this name already exists (will be overwritten)
+        save_file = saves_dir / f"{save_name}.save"
+        existing_save = save_file.exists()
+        
+        # Manage max 5 saves - delete oldest BEFORE saving new one
+        # This ensures we maintain max 5 saves at all times
+        MAX_SAVES = 5
+        save_files = sorted(saves_dir.glob('*.save'), key=lambda p: p.stat().st_mtime)
+        
+        # If we're at the limit and not overwriting an existing save, delete the oldest
+        if len(save_files) >= MAX_SAVES and not existing_save:
+            # Delete oldest save(s) until we have room for the new one
+            saves_to_delete = len(save_files) - (MAX_SAVES - 1)
+            for old_save in save_files[:saves_to_delete]:
+                old_save.unlink()
+        
+        # Encode game state
+        from save_load.encoder import GameStateEncoder
+        encoder = GameStateEncoder()
+        level_code = encoder.encode(game_state, campaign_level_index=level_index)
+        
+        # Save to file
+        with open(save_file, 'w') as f:
+            f.write(level_code)
+        
+        return jsonify({'success': True, 'message': 'Game saved successfully'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'Error saving game: {str(e)}'}), 500
+
+
+@app.route('/api/game/list-saves', methods=['GET'])
+def api_game_list_saves():
+    """List all saved games."""
+    try:
+        saves_dir = PROJECT_ROOT / 'saves'
+        saves_dir.mkdir(exist_ok=True)
+        
+        # Get all save files
+        save_files = sorted(saves_dir.glob('*.save'), key=lambda p: p.stat().st_mtime, reverse=True)
+        
+        saves = []
+        for save_file in save_files:
+            # Extract save name (filename without .save extension)
+            save_name = save_file.stem
+            # Get modification time
+            mtime = save_file.stat().st_mtime
+            from datetime import datetime
+            save_date = datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S')
+            
+            saves.append({
+                'name': save_name,
+                'date': save_date
+            })
+        
+        return jsonify({'success': True, 'saves': saves})
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'Error listing saves: {str(e)}'}), 500
+
+
+@app.route('/api/game/load', methods=['POST'])
+def api_game_load():
+    """Load a saved game."""
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'error': 'No data provided'}), 400
+    
+    save_name = data.get('save_name', '').strip()
+    if not save_name:
+        return jsonify({'success': False, 'error': 'Save name is required'}), 400
+    
+    try:
+        saves_dir = PROJECT_ROOT / 'saves'
+        save_file = saves_dir / f"{save_name}.save"
+        
+        if not save_file.exists():
+            return jsonify({'success': False, 'error': 'Save file not found'}), 404
+        
+        # Read level code from file
+        with open(save_file, 'r') as f:
+            level_code = f.read().strip()
+        
+        # Decode game state
+        from save_load.decoder import GameStateDecoder
+        decoder = GameStateDecoder()
+        result = decoder.decode(level_code)
+        
+        if isinstance(result, tuple):
+            game_state, campaign_level_index = result
+        else:
+            game_state = result
+            campaign_level_index = -1
+        
+        if game_state is None:
+            return jsonify({'success': False, 'error': 'Failed to decode game state'}), 500
+        
+        # Create new session for the loaded game
+        import uuid
+        new_session_id = str(uuid.uuid4())
+        
+        # Ensure adjacency graph is built
+        from save_load.decoder import _build_adjacency_graph
+        _build_adjacency_graph(game_state)
+        
+        # Initialize starting money for all provinces (if not already set)
+        from core.enums import EventType, PieceType
+        for province in game_state.provinces_manager.provinces:
+            if province.get_money() == 0:
+                # Set default starting money (matching api_game_init)
+                province.set_money(10)
+        
+        # Initialize game manager
+        from core.game_manager import GameManager, GameMode
+        game_manager = GameManager(game_state, GameMode.CAMPAIGN)
+        
+        # Store session
+        cleanup_oldest_session()
+        game_sessions[new_session_id] = {
+            'game_state': game_state,
+            'game_manager': game_manager,
+            'level_index': campaign_level_index if campaign_level_index >= 0 else 0,
+            'created_at': time.time()
+        }
+        
+        # Set session ID
+        session['session_id'] = new_session_id
+        
+        return jsonify({
+            'success': True,
+            'session_id': new_session_id,
+            'level_index': campaign_level_index if campaign_level_index >= 0 else 0
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'Error loading game: {str(e)}'}), 500
+
+
+@app.route('/api/game/delete-save', methods=['POST'])
+def api_game_delete_save():
+    """Delete a saved game."""
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'error': 'No data provided'}), 400
+    
+    save_name = data.get('save_name', '').strip()
+    if not save_name:
+        return jsonify({'success': False, 'error': 'Save name is required'}), 400
+    
+    try:
+        saves_dir = PROJECT_ROOT / 'saves'
+        save_file = saves_dir / f"{save_name}.save"
+        
+        if not save_file.exists():
+            return jsonify({'success': False, 'error': 'Save file not found'}), 404
+        
+        # Delete the save file
+        save_file.unlink()
+        
+        return jsonify({'success': True, 'message': 'Save file deleted successfully'})
+    except Exception as e:
+        return jsonify({'success': False, 'error': f'Error deleting save: {str(e)}'}), 500
 
 
 @app.route('/api/game/undo', methods=['POST'])

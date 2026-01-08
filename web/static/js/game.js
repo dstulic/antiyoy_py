@@ -144,13 +144,12 @@ function updateSoundToggleUI() {
 
 // Initialize game when page loads
 document.addEventListener('DOMContentLoaded', function() {
-    // Initialize game session
-    fetch(`/api/game/init/${levelIndex}`)
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                gameSessionId = data.session_id;
-                console.log('Game initialized:', gameSessionId);
+    // First, check if there's an existing session (e.g., from a loaded game)
+    fetch('/api/game/state')
+        .then(response => {
+            if (response.ok) {
+                // Session exists - use it (e.g., from a loaded game)
+                console.log('Using existing game session');
                 
                 // Hide loading message
                 const loadingDiv = document.querySelector('.game-loading');
@@ -161,20 +160,45 @@ document.addEventListener('DOMContentLoaded', function() {
                 // Initialize game board rendering
                 initializeGameBoard();
                 
-                // Load initial game state and auto-select city hex
+                // Load game state and auto-select city hex
                 loadGameState().then(() => {
                     autoSelectCityHex();
                 });
-                
-                // Polling disabled for now - game state only updates on user actions
-                // Can be re-enabled later for AI turns or multiplayer
-                // startGameStatePolling();
             } else {
-                alert('Failed to initialize game: ' + (data.error || 'Unknown error'));
+                // No session exists - initialize new game from campaign level
+                console.log('No existing session, initializing new game');
+                return fetch(`/api/game/init/${levelIndex}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            gameSessionId = data.session_id;
+                            console.log('Game initialized:', gameSessionId);
+                            
+                            // Hide loading message
+                            const loadingDiv = document.querySelector('.game-loading');
+                            if (loadingDiv) {
+                                loadingDiv.style.display = 'none';
+                            }
+                            
+                            // Initialize game board rendering
+                            initializeGameBoard();
+                            
+                            // Load initial game state and auto-select city hex
+                            loadGameState().then(() => {
+                                autoSelectCityHex();
+                            });
+                            
+                            // Polling disabled for now - game state only updates on user actions
+                            // Can be re-enabled later for AI turns or multiplayer
+                            // startGameStatePolling();
+                        } else {
+                            alert('Failed to initialize game: ' + (data.error || 'Unknown error'));
+                        }
+                    });
             }
         })
         .catch(error => {
-            console.error('Error initializing game:', error);
+            console.error('Error checking/initializing game:', error);
             alert('Error initializing game');
         });
 });
