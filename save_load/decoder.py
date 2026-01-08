@@ -14,6 +14,7 @@ from save_load.format import (
     SECTION_MAIL_BASKET,
     SECTION_FOG,
     SECTION_CORE_INIT,
+    SECTION_RNG_STATE,
 )
 from core.game_state import GameState
 from core.enums import HColor, PieceType, RulesType, EntityType
@@ -77,6 +78,9 @@ class GameStateDecoder:
         campaign_level_index = -1
         
         try:
+            # Store original level code for deterministic seed generation
+            game_state._original_level_code = level_code
+            
             # Decode campaign level index first
             campaign_level_index = self._decode_campaign_level_index(level_code)
             
@@ -86,12 +90,26 @@ class GameStateDecoder:
             self._decode_core_current_ids(game_state, level_code)
             self._decode_player_entities(game_state, level_code)
             self._decode_provinces(game_state, level_code)
+            self._decode_ready(game_state, level_code)
             self._decode_rules(game_state, level_code)
             self._decode_turn(game_state, level_code)
             # Optional sections
             self._decode_diplomacy(game_state, level_code)
             self._decode_mail_basket(game_state, level_code)
             self._decode_fog(game_state, level_code)
+            self._decode_rng_state(game_state, level_code)
+            
+            # Reinitialize TreeManager RNG with correct seed or restore saved state
+            if hasattr(game_state, 'tree_manager') and game_state.tree_manager:
+                if game_state._rng_state:
+                    # Restore saved RNG state
+                    game_state.tree_manager.random.setstate(game_state._rng_state)
+                else:
+                    # Reinitialize with deterministic seed from original level code
+                    from core.rng_utils import get_deterministic_seed
+                    import random
+                    seed = get_deterministic_seed(game_state._original_level_code)
+                    game_state.tree_manager.random = random.Random(seed)
             
             return game_state, campaign_level_index
         except Exception as e:
@@ -272,18 +290,35 @@ class GameStateDecoder:
             except (ValueError, IndexError):
                 continue
         
-        # Update provinces based on their first hex
+        # Update provinces by finding any hex in the province that matches the level code
+        # (The level code specifies a coordinate, but it might not be the first hex in the province)
         for province in game_state.provinces_manager.provinces:
             hexes = province.get_hexes()
             if not hexes:
                 continue
-            first_hex = hexes[0]
-            key = (first_hex.coordinate1, first_hex.coordinate2)
-            if key in province_data_map:
-                data = province_data_map[key]
-                province.set_id(data["id"])
-                province.set_money(data["money"])
-                province.set_city_name(data["city_name"])
+            
+            # Try to find a matching hex coordinate in this province
+            matched_data = None
+            for hex in hexes:
+                key = (hex.coordinate1, hex.coordinate2)
+                if key in province_data_map:
+                    matched_data = province_data_map[key]
+                    # Remove from map so we don't match it again
+                    del province_data_map[key]
+                    break
+            
+            if matched_data:
+                province.set_id(matched_data["id"])
+                province.set_money(matched_data["money"])
+                province.set_city_name(matched_data["city_name"])
+    
+    def _decode_ready(self, game_state: GameState, level_code: str) -> None:
+        """Decode readiness state."""
+        from save_load.format import get_section, SECTION_READY
+        source = get_section(level_code, SECTION_READY)
+        if not source:
+            return
+        game_state.readiness_manager.decode(source)
 
     def _decode_rules(self, game_state: GameState, level_code: str) -> None:
         """Decode rules section."""
@@ -320,10 +355,32 @@ class GameStateDecoder:
     def _decode_fog(self, game_state: GameState, level_code: str) -> None:
         """Decode fog of war section."""
         source = get_section(level_code, SECTION_FOG)
-        if source:
-            # Placeholder - fog of war manager not yet implemented
-            # Would set: game_state.fog_of_war_manager.enabled = (source == "true")
-            pass
+        if source and game_state.fog_of_war_manager:
+            # Enable fog of war if level code specifies it
+            # Handle "true," or "true" format
+            source_clean = source.strip().rstrip(',').lower()
+            enabled = (source_clean == "true")
+            game_state.fog_of_war_manager.set_enabled(enabled)
+    
+    def _decode_rng_state(self, game_state: GameState, level_code: str) -> None:
+        """Decode RNG state section."""
+        import pickle
+        import base64
+        
+        source = get_section(level_code, SECTION_RNG_STATE)
+        if not source or source == "-":
+            return
+        
+        try:
+            # Decode base64 string back to bytes
+            rng_state_bytes = base64.b64decode(source)
+            # Unpickle the RNG state tuple
+            rng_state = pickle.loads(rng_state_bytes)
+            # Store in game state
+            game_state._rng_state = rng_state
+        except Exception as e:
+            print(f"Warning: Failed to decode RNG state: {e}")
+            # If decoding fails, RNG will use seed from original level code
     
     def _decode_campaign_level_index(self, level_code: str) -> int:
         """Decode campaign level index."""

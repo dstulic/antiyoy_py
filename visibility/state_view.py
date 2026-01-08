@@ -29,8 +29,21 @@ class StateView:
 
     def _update_view(self) -> None:
         """Update the view based on current game state."""
-        # For now, show all hexes (fog-of-war will be added later)
-        self._visible_hexes = list(self.game_state.hexes)
+        # Update fog of war if enabled
+        if (self.game_state.fog_of_war_manager and 
+            self.game_state.fog_of_war_manager.enabled):
+            # Temporarily set target color to this player's color
+            original_target = self.game_state.fog_of_war_manager.target_color
+            self.game_state.fog_of_war_manager.target_color = self.player_color
+            self.game_state.fog_of_war_manager.apply_update()
+            # Restore original target
+            self.game_state.fog_of_war_manager.target_color = original_target
+            
+            # Get visible hexes from fog of war manager
+            self._visible_hexes = self.game_state.fog_of_war_manager.currently_visible_hexes.copy()
+        else:
+            # No fog of war - show all hexes
+            self._visible_hexes = list(self.game_state.hexes)
         
         # Get player entity
         if self.game_state.entities_manager:
@@ -43,8 +56,18 @@ class StateView:
                 if entity.color != self.player_color
             ]
         
-        # Get visible provinces (all for now)
-        self._visible_provinces = list(self.game_state.provinces_manager.provinces)
+        # Get visible provinces (only those with at least one visible hex)
+        visible_province_ids = set()
+        for hex in self._visible_hexes:
+            province = hex.get_province()
+            if province:
+                visible_province_ids.add(id(province))
+        
+        self._visible_provinces = [
+            province
+            for province in self.game_state.provinces_manager.provinces
+            if id(province) in visible_province_ids
+        ]
 
     def get_visible_hexes(self) -> List[Hex]:
         """Get hexes visible to this player."""

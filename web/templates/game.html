@@ -9,35 +9,65 @@
 </head>
 <body>
     <div class="game-container">
-        <!-- Hamburger Menu -->
-        <div class="hamburger-menu">
+        <!-- Status Bar -->
+        <div class="status-bar" id="statusBar" style="display: flex;">
             <button class="hamburger-icon" id="hamburgerBtn" onclick="toggleMenu()">
                 <span></span>
                 <span></span>
                 <span></span>
             </button>
-            
-            <div class="menu-overlay" id="menuOverlay" onclick="toggleMenu()"></div>
-            
-            <div class="menu-panel" id="menuPanel">
-                <div class="menu-header">
-                    <h2>Menu</h2>
-                    <button class="close-menu" onclick="toggleMenu()">×</button>
+            <div class="status-items-container">
+                <div class="status-item">
+                    <span class="status-label">Funds:</span>
+                    <span class="status-value" id="statusFunds">0</span>
                 </div>
-                <div class="menu-items">
-                    <button class="menu-item" onclick="restartGame()">
-                        <span class="menu-icon">↻</span>
-                        Restart
-                    </button>
-                    <button class="menu-item" onclick="saveGame()">
-                        <span class="menu-icon">💾</span>
-                        Save
-                    </button>
-                    <button class="menu-item" onclick="exitGame()">
-                        <span class="menu-icon">←</span>
-                        Exit
-                    </button>
+                <div class="status-item">
+                    <span class="status-label">Turn Profit:</span>
+                    <span class="status-value" id="statusProfit">0</span>
                 </div>
+                <div class="status-item">
+                    <span class="status-label" id="statusCityName"></span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Actions Bar -->
+        <div class="actions-bar" id="actionsBar">
+            <button class="action-button" id="undoBtn" onclick="undoAction()" title="Undo">
+                <span class="action-icon">↶</span>
+            </button>
+            <div class="build-menu-inline" id="buildMenu" style="display: none;">
+                <!-- Build items will be populated here -->
+            </div>
+            <button class="action-button" id="endTurnBtn" onclick="endTurn()" title="End Turn">
+                <span class="action-icon">→</span>
+            </button>
+        </div>
+        
+        <!-- Hamburger Menu Overlay and Panel -->
+        <div class="menu-overlay" id="menuOverlay" onclick="toggleMenu()"></div>
+        <div class="menu-panel" id="menuPanel">
+            <div class="menu-header">
+                <h2>Menu</h2>
+                <button class="close-menu" onclick="toggleMenu()">×</button>
+            </div>
+            <div class="menu-items">
+                <button class="menu-item" onclick="restartGame()">
+                    <span class="menu-icon">↻</span>
+                    Restart
+                </button>
+                <button class="menu-item" onclick="saveGame()">
+                    <span class="menu-icon">💾</span>
+                    Save
+                </button>
+                <button class="menu-item" onclick="exitGame()">
+                    <span class="menu-icon">←</span>
+                    Exit
+                </button>
+                <button class="menu-item" id="soundToggleBtn" onclick="toggleSounds()">
+                    <span class="menu-icon">🔇</span>
+                    <span id="soundToggleText">Enable Sounds</span>
+                </button>
             </div>
         </div>
         
@@ -53,6 +83,7 @@
         const levelIndex = {{ level_index }};
     </script>
     <script src="{{ url_for('static', filename='js/hex_grid.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/animations.js') }}"></script>
     <script src="{{ url_for('static', filename='js/game_board.js') }}"></script>
     <script src="{{ url_for('static', filename='js/game.js') }}"></script>
 </body>

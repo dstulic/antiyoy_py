@@ -435,10 +435,52 @@ class EventPieceBuild(AbstractEvent):
 
     def apply_change(self) -> None:
         """Apply piece build."""
-        if self.hex:
-            self.hex.set_piece(self.piece_type)
-            if is_unit(self.piece_type):
-                self.hex.set_unit_id(self.unit_id)
+        if not self.core_model or not self.hex or not self.piece_type:
+            return
+        
+        # Get province
+        province = None
+        if self.province_id != -1 and self.core_model.provinces_manager:
+            province = self.core_model.provinces_manager.get_province(self.province_id)
+        
+        if not province:
+            return
+        
+        # Calculate price before applying changes (price may change after)
+        price = 0
+        if self.core_model.ruleset:
+            price = self.core_model.ruleset.get_price(province, self.piece_type)
+        
+        # Check if hex was empty and in province before building (for readiness)
+        was_empty = self.hex.is_empty()
+        was_in_province = self.hex.color == province.get_color()
+        
+        # Handle tree reward (if cutting down a tree)
+        if self.hex.has_tree() and self.hex.color == province.get_color():
+            if self.core_model.ruleset:
+                reward = self.core_model.ruleset.get_tree_reward()
+                province.set_money(province.get_money() + reward)
+        
+        # Set piece on hex
+        self.hex.set_piece(self.piece_type)
+        
+        # For units, set unit ID and color
+        if is_unit(self.piece_type):
+            self.hex.set_unit_id(self.unit_id)
+            self.hex.set_color(province.get_color())
+            
+            # Set readiness: unit is ready only if built on empty hex within province
+            # If built on gray hex (outside province), it counts as a move and is not ready
+            ready = False
+            if was_empty and was_in_province:
+                if self.core_model.ruleset and self.core_model.ruleset.is_unit_ready_on_built():
+                    ready = True
+            
+            if self.core_model.readiness_manager:
+                self.core_model.readiness_manager.set_ready(self.hex, ready)
+        
+        # Deduct money from province
+        province.set_money(province.get_money() - price)
 
     def copy_from(self, src_event: AbstractEvent) -> None:
         """Copy from another event."""
@@ -560,46 +602,213 @@ class EventMatchStarted(AbstractEvent):
 
 
 class EventMerge(AbstractEvent):
-    """Event for merging units."""
+    """Event for merging units (when moving a unit onto another unit)."""
 
     def __init__(self):
         super().__init__()
         self.start: Optional[Hex] = None
         self.finish: Optional[Hex] = None
+        self.unit_id: int = -1
 
     def get_type(self) -> EventType:
         return EventType.MERGE
 
     def is_valid(self) -> bool:
-        return self.start is not None and self.finish is not None
+        """Check if merge event is valid."""
+        if self.start is None or self.finish is None:
+            return False
+        if self.unit_id == -1:
+            return False
+        if not self.start.has_unit():
+            return False
+        if not self.finish.has_unit():
+            return False
+        if self.start.color != self.finish.color:
+            return False
+        # Check if both hexes are in the same province
+        if self.start.get_province() != self.finish.get_province():
+            return False
+        # Check if merge result is valid
+        from core.core_utils import get_merge_result
+        if get_merge_result(self.start.piece, self.finish.piece) is None:
+            return False
+        return True
 
     def apply_change(self) -> None:
-        pass  # TODO: Implement merge logic
+        """Apply unit merge."""
+        if not self.core_model or not self.start or not self.finish:
+            return
+        
+        from core.core_utils import get_merge_result
+        merge_result = get_merge_result(self.start.piece, self.finish.piece)
+        if merge_result is None:
+            return
+        
+        # Merge: remove unit from start hex, merge into finish hex
+        self.start.set_piece(None)
+        self.start.set_unit_id(-1)
+        self.finish.set_piece(merge_result)
+        self.finish.set_unit_id(self.unit_id)
+        # TODO: Handle readiness manager when implemented
 
     def copy_from(self, src_event: AbstractEvent) -> None:
-        pass
+        """Copy from another event."""
+        if isinstance(src_event, EventMerge) and self.core_model:
+            if src_event.start:
+                self.start = self.core_model.get_hex_with_same_coordinates(src_event.start)
+            if src_event.finish:
+                self.finish = self.core_model.get_hex_with_same_coordinates(src_event.finish)
+            self.unit_id = src_event.unit_id
 
     def _get_local_encoded_info(self) -> str:
+        """Get encoded info."""
+        if self.start and self.finish:
+            return (
+                f"{self.start.coordinate1} {self.start.coordinate2} "
+                f"{self.finish.coordinate1} {self.finish.coordinate2} {self.unit_id}"
+            )
         return ""
+
+    def set_start(self, start: Hex) -> None:
+        """Set start hex."""
+        self.start = start
+
+    def set_finish(self, finish: Hex) -> None:
+        """Set finish hex."""
+        self.finish = finish
+
+    def set_unit_id(self, unit_id: int) -> None:
+        """Set unit ID."""
+        self.unit_id = unit_id
 
 
 class EventMergeOnBuild(AbstractEvent):
-    """Event for merge on build."""
+    """Event for merging units when building a new unit on an existing unit."""
+
+    def __init__(self):
+        super().__init__()
+        self.hex: Optional[Hex] = None
+        self.piece_type: Optional[PieceType] = None
+        self.unit_id: int = -1
+        self.province_id: int = -1
 
     def get_type(self) -> EventType:
         return EventType.MERGE_ON_BUILD
 
     def is_valid(self) -> bool:
+        """Check if merge on build event is valid."""
+        if self.hex is None or self.piece_type is None:
+            return False
+        if self.unit_id == -1:
+            return False
+        if self.province_id == -1:
+            return False
+        
+        from core.core_utils import is_unit
+        if not is_unit(self.piece_type):
+            return False
+        
+        if not self.core_model or not self.core_model.ruleset:
+            return False
+        
+        if not self.core_model.ruleset.is_buildable(self.piece_type):
+            return False
+        
+        # Get province
+        province = None
+        if self.core_model.provinces_manager:
+            province = self.core_model.provinces_manager.get_province(self.province_id)
+        
+        if not province:
+            return False
+        
+        # Check if province can afford it
+        if not self.core_model.ruleset:
+            return False
+        price = self.core_model.ruleset.get_price(province, self.piece_type)
+        if province.get_money() < price:
+            return False
+        
+        # Check if hex has a unit to merge with
+        if not self.hex.has_unit():
+            return False
+        
+        # Check if hex color matches province color (peaceful merge)
+        if self.hex.color != province.get_color():
+            return False
+        
+        # Check if merge result is valid
+        from core.core_utils import get_merge_result
+        if get_merge_result(self.piece_type, self.hex.piece) is None:
+            return False
+        
         return True
 
     def apply_change(self) -> None:
-        pass
+        """Apply merge on build."""
+        if not self.core_model or not self.hex or not self.piece_type:
+            return
+        
+        # Get province
+        province = None
+        if self.province_id != -1 and self.core_model.provinces_manager:
+            province = self.core_model.provinces_manager.get_province(self.province_id)
+        
+        if not province:
+            return
+        
+        # Calculate price
+        price = 0
+        if self.core_model.ruleset:
+            price = self.core_model.ruleset.get_price(province, self.piece_type)
+        
+        # Merge the units
+        from core.core_utils import get_merge_result
+        merge_result = get_merge_result(self.piece_type, self.hex.piece)
+        if merge_result is None:
+            return
+        
+        self.hex.set_piece(merge_result)
+        self.hex.set_unit_id(self.unit_id)
+        
+        # Deduct money from province
+        province.set_money(province.get_money() - price)
+        
+        # TODO: Handle readiness manager when implemented
 
     def copy_from(self, src_event: AbstractEvent) -> None:
-        pass
+        """Copy from another event."""
+        if isinstance(src_event, EventMergeOnBuild) and self.core_model:
+            if src_event.hex:
+                self.hex = self.core_model.get_hex_with_same_coordinates(src_event.hex)
+            self.piece_type = src_event.piece_type
+            self.unit_id = src_event.unit_id
+            self.province_id = src_event.province_id
 
     def _get_local_encoded_info(self) -> str:
+        """Get encoded info."""
+        if self.hex and self.piece_type:
+            return (
+                f"{self.hex.coordinate1} {self.hex.coordinate2} "
+                f"{self.piece_type.value} {self.unit_id} {self.province_id}"
+            )
         return ""
+
+    def set_hex(self, hex: Hex) -> None:
+        """Set hex."""
+        self.hex = hex
+
+    def set_piece_type(self, piece_type: PieceType) -> None:
+        """Set piece type."""
+        self.piece_type = piece_type
+
+    def set_unit_id(self, unit_id: int) -> None:
+        """Set unit ID."""
+        self.unit_id = unit_id
+
+    def set_province_id(self, province_id: int) -> None:
+        """Set province ID."""
+        self.province_id = province_id
 
 
 class EventSetRelationSoftly(AbstractEvent):

@@ -23,6 +23,7 @@ from save_load.format import (
     SECTION_EDITOR,
     SECTION_CAMPAIGN,
     SECTION_PAUSE_NAME,
+    SECTION_RNG_STATE,
 )
 from core.game_state import GameState
 
@@ -90,9 +91,9 @@ class GameStateEncoder:
         builder.append(start_section(SECTION_PROVINCES))
         builder.append(game_state.provinces_manager.encode())
         
-        # Ready (readiness manager - placeholder for now)
+        # Ready (readiness manager)
         builder.append(start_section(SECTION_READY))
-        builder.append("-")  # Placeholder
+        builder.append(game_state.readiness_manager.encode())
         
         # Rules
         builder.append(start_section(SECTION_RULES))
@@ -142,6 +143,22 @@ class GameStateEncoder:
         if pause_name:
             builder.append(start_section(SECTION_PAUSE_NAME))
             builder.append(pause_name)
+        
+        # RNG state - save current random number generator state
+        rng_state = game_state.get_rng_state()
+        if rng_state:
+            import pickle
+            import base64
+            # Pickle the RNG state tuple to bytes
+            rng_state_bytes = pickle.dumps(rng_state)
+            # Encode to base64 string for safe storage in level code
+            rng_state_str = base64.b64encode(rng_state_bytes).decode('ascii')
+            builder.append(start_section(SECTION_RNG_STATE))
+            builder.append(rng_state_str)
+        else:
+            # If no RNG state, store placeholder
+            builder.append(start_section(SECTION_RNG_STATE))
+            builder.append("-")
         
         # End with #
         builder.append("#")

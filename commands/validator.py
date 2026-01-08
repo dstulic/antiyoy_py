@@ -40,6 +40,11 @@ class CommandValidator:
         Returns:
             Tuple of (is_valid, error_message)
         """
+        # Check if game has ended - no more turns allowed
+        if hasattr(self.game_state, 'game_end_manager') and self.game_state.game_end_manager:
+            if not self.game_state.game_end_manager.can_make_turn():
+                return False, "Game has ended"
+        
         # Check if it's the player's turn (except for end_turn which can be checked separately)
         if command.command_type != "end_turn":
             if not self._is_player_turn(player_color):
@@ -85,13 +90,32 @@ class CommandValidator:
         if command.start_hex.color != player_color:
             return False, "Unit does not belong to player"
         
-        # Check finish hex is adjacent
-        if not command.start_hex.is_linked_to(command.finish_hex):
-            return False, "Finish hex is not adjacent to start hex"
+        # Check if unit is ready to move
+        if not self.game_state.readiness_manager.is_ready(command.start_hex):
+            return False, "Unit has already moved this turn"
         
-        # Check finish hex is empty or has enemy unit
+        # Use MoveZoneManager to check if finish hex is reachable (up to 4 hexes away)
+        # Ensure adjacency is built
+        if not command.start_hex.adjacent_hexes:
+            from save_load.decoder import _build_adjacency_graph
+            _build_adjacency_graph(self.game_state)
+        
+        # Update move zone for the unit
+        self.game_state.move_zone_manager.update_for_unit(command.start_hex)
+        
+        # Check if finish hex is in the move zone
+        if not self.game_state.move_zone_manager.contains(command.finish_hex):
+            return False, "Finish hex is not reachable (outside movement range)"
+        
+        # Check finish hex is empty, has enemy unit, or has friendly unit (for merging)
         if command.finish_hex.has_unit() and command.finish_hex.color == player_color:
-            return False, "Cannot move to hex with friendly unit"
+            # Check if both hexes are in the same province (required for merging)
+            if command.start_hex.get_province() != command.finish_hex.get_province():
+                return False, "Cannot move to hex with friendly unit in different province"
+            # Check if merge result is valid
+            from core.core_utils import get_merge_result
+            if get_merge_result(command.start_hex.piece, command.finish_hex.piece) is None:
+                return False, "Cannot merge these units"
         
         return True, None
 
@@ -100,30 +124,79 @@ class CommandValidator:
         if not command.hex:
             return False, "Hex required"
         
-        # Check hex belongs to player
-        if command.hex.color != player_color:
-            return False, "Hex does not belong to player"
-        
-        # Check hex is empty
-        if command.hex.has_piece():
-            return False, "Hex already has a piece"
-        
-        # Check ruleset allows building
         if not self.game_state.ruleset:
             return False, "No ruleset defined"
         
-        # Check if piece can be built on this hex
-        if not self.game_state.ruleset.is_buildable(command.hex, command.piece_type):
-            return False, f"Cannot build {command.piece_type.value} on this hex"
+        # Get province - for units, use province from province_hex if provided (for gray hexes)
+        # For static pieces, get province from the target hex
+        from core.core_utils import is_unit
+        province = None
         
-        # Check if player has enough money
-        province = self.game_state.provinces_manager.find_province_slowly(command.hex)
+        if is_unit(command.piece_type) and command.province_hex:
+            # For units: get province from the selected province hex (allows building on gray hexes)
+            province = command.province_hex.get_province()
+        
+        # If province not found yet, try to get it from target hex
         if not province:
-            return False, "Hex is not in a province"
+            province = command.hex.get_province()
+            if not province:
+                province = self.game_state.provinces_manager.find_province_slowly(command.hex)
         
-        price = self.game_state.ruleset.get_price(command.piece_type)
+        if not province:
+            return False, "Province not found"
+        
+        # Check if province belongs to current player
+        if province.get_color() != player_color:
+            return False, "Province does not belong to current player"
+        
+        # For static pieces, check that hex belongs to the province
+        # For units, hex can be gray (neutral) - it will be colored when unit is built
+        if not is_unit(command.piece_type):
+            if command.hex.color != province.get_color():
+                return False, "Hex does not belong to province"
+        
+        # Check if piece type is buildable
+        if not self.game_state.ruleset.is_buildable(command.piece_type):
+            return False, f"Piece type {command.piece_type.value} is not buildable"
+        
+        # Check if province can afford it
+        price = self.game_state.ruleset.get_price(province, command.piece_type)
         if province.get_money() < price:
-            return False, f"Not enough money (need {price}, have {province.get_money()})"
+            return False, f"Not enough money. Need {price}, have {province.get_money()}"
+        
+        # Check if hex is empty (for static pieces) or can accept unit
+        if is_unit(command.piece_type):
+            # For units: validate that hex is adjacent to province (allows building on gray hexes)
+            province_hexes = province.get_hexes()
+            is_adjacent = False
+            for p_hex in province_hexes:
+                if command.hex in p_hex.adjacent_hexes:
+                    is_adjacent = True
+                    break
+            
+            if not is_adjacent:
+                return False, "Unit can only be built on hexes adjacent to province"
+            
+            # For units, check if hex is empty, has tree/grave, or has mergeable unit
+            if command.hex.has_piece():
+                if command.hex.piece not in (PieceType.PINE, PieceType.PALM, PieceType.GRAVE):
+                    # Check if it's a mergeable unit (same color)
+                    if command.hex.has_unit() and command.hex.color == province.get_color():
+                        # Check if merge result is valid
+                        from core.core_utils import get_merge_result
+                        if get_merge_result(command.piece_type, command.hex.piece) is None:
+                            return False, "Cannot merge these units"
+                    else:
+                        return False, "Cannot build unit on this hex"
+        else:
+            # For static pieces (towers, farms), hex must be empty
+            # Exception: strong_tower can be built on tower
+            if command.piece_type == PieceType.STRONG_TOWER:
+                if command.hex.piece != PieceType.TOWER:
+                    return False, "Strong tower can only be built on existing tower"
+            else:
+                if not command.hex.is_empty():
+                    return False, "Hex must be empty to build this piece"
         
         return True, None
 

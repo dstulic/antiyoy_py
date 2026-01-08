@@ -64,12 +64,19 @@ function getColorName(colorValue) {
         'blue': 'blue',
         'yellow': 'yellow',
         'cyan': 'cyan',
+        'aqua': 'aqua',
         'white': 'white',
         'orange': 'orange',
         'purple': 'purple',
         'rose': 'rose',
         'mint': 'mint',
-        'ice': 'ice'
+        'ice': 'ice',
+        'brown': 'brown',
+        'lavender': 'lavender',
+        'brass': 'brass',
+        'algae': 'algae',
+        'orchid': 'orchid',
+        'whiskey': 'whiskey'
     };
     return colorMap[colorValue.toLowerCase()] || 'gray';
 }
@@ -88,6 +95,7 @@ function getPieceImage(pieceType) {
         'tower': 'tower.png',
         'strong_tower': 'strong_tower.png',
         'city': 'city.png',
+        'farm': 'farm0.png',  // Use farm0.png for farm piece type
         'farm0': 'farm0.png',
         'farm1': 'farm1.png',
         'farm2': 'farm2.png',

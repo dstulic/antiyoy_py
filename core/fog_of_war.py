@@ -214,6 +214,9 @@ class FogOfWarManager:
 
     def _apply_provinces(self) -> None:
         """Apply light from provinces that should be visible."""
+        # Prepare hexes once before processing all provinces
+        self._prepare_hexes()
+        
         for province in self.game_state.provinces_manager.provinces:
             if not self._should_province_be_light_upped(province):
                 continue
@@ -232,11 +235,12 @@ class FogOfWarManager:
     def _apply_province(self, province: "Province") -> None:
         """Apply light from all hexes in a province."""
         for hex in province.get_hexes():
+            # Prepare hexes before each wave propagation (reset flags)
             self._prepare_hexes()
-            # Set counter to light radius
-            if not hasattr(hex, 'counter'):
-                hex.counter = 0
+            # Set counter to light radius for the starting hex
             hex.counter = self._get_light_radius(hex)
+            # Clear fog on the starting hex
+            hex.fog = False
             if self.wave_light:
                 self.wave_light.apply(hex)
 

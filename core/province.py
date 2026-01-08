@@ -235,8 +235,11 @@ class ProvincesBuilder:
                 continue
             if not hex.is_colored():
                 continue
-            if not hex.is_adjacent_to_hexes_of_same_color():
+            # Skip gray (neutral) hexes that aren't part of a province
+            if hex.color == HColor.GRAY and not hex.is_adjacent_to_hexes_of_same_color():
                 continue
+            # For non-gray hexes, always create a province (even if single-hex)
+            # The wave worker will handle both multi-hex and single-hex provinces
             self._build_province(hex)
 
     def _check_permission(self) -> None:
@@ -281,6 +284,16 @@ class PrwCluster:
     def __init__(self):
         """Initialize cluster."""
         self.hexes: List[Hex] = []
+    
+    def has_city(self) -> bool:
+        """Check if cluster has a city."""
+        from core.enums import PieceType
+        return any(hex.piece == PieceType.CITY for hex in self.hexes)
+    
+    def count_farms(self) -> int:
+        """Count farms in cluster."""
+        from core.enums import PieceType
+        return sum(1 for hex in self.hexes if hex.piece == PieceType.FARM)
 
 
 class ProvincesReductionWorker:
@@ -331,25 +344,15 @@ class ProvincesReductionWorker:
     def _update_clusters(self) -> None:
         """Update clusters after color change."""
         self.clusters.clear()
-        if not self.previous_color:
+        if not self.previous_color or not self.modified_hex:
             return
-        hexes = (
-            self.provinces_manager.core_model.hexes
-            if self.provinces_manager.core_model
-            else []
-        )
-        for hex in hexes:
-            if hex.flag:
+        # Only look at adjacent hexes to the modified hex (matching Java implementation)
+        for adjacent_hex in self.modified_hex.adjacent_hexes:
+            if adjacent_hex.flag:
                 continue
-            if hex.color != self.previous_color:
+            if adjacent_hex.color != self.previous_color:
                 continue
-            if not hex.is_adjacent_to_hexes_of_same_color():
-                continue
-            cluster = PrwCluster()
-            self.current_cluster = cluster
-            self.wave_worker.apply(hex)
-            if len(cluster.hexes) > 0:
-                self.clusters.append(cluster)
+            self._add_cluster(adjacent_hex)
 
     def _handle_simple_situations(self) -> None:
         """Handle simple situations (no split, single hex removal)."""
@@ -358,20 +361,27 @@ class ProvincesReductionWorker:
                 self.provinces_manager.remove_province(self.modified_province)
             return
         if len(self.clusters) == 1:
-            # Single cluster - just update province
-            cluster = self.clusters[0]
-            if self.modified_province:
-                # Remove hexes not in cluster
-                hexes_to_remove = [
-                    h
-                    for h in self.modified_province.get_hexes()
-                    if h not in cluster.hexes
-                ]
-                for h in hexes_to_remove:
-                    self.modified_province.remove_hex(h)
+            # Single cluster - remove single hex
+            self._remove_single_hex()
             return
         # Multiple clusters - handle split
         self._handle_split_situation()
+    
+    def _remove_single_hex(self) -> None:
+        """Remove single hex from province."""
+        if not self.modified_province or not self.modified_hex:
+            return
+        self.modified_province.remove_hex(self.modified_hex)
+        if len(self.modified_province.get_hexes()) < 2:
+            self.provinces_manager.remove_province(self.modified_province)
+    
+    def _add_cluster(self, hex: Hex) -> None:
+        """Add a cluster starting from hex."""
+        cluster = PrwCluster()
+        self.current_cluster = cluster
+        self.wave_worker.apply(hex)
+        if len(cluster.hexes) > 0:
+            self.clusters.append(cluster)
 
     def _handle_split_situation(self) -> None:
         """Handle province split into multiple clusters."""
@@ -380,39 +390,72 @@ class ProvincesReductionWorker:
         self._make_provinces_for_rest_of_clusters()
 
     def _update_successor_cluster(self) -> None:
-        """Update successor cluster (largest or contains most money)."""
-        if not self.modified_province:
-            self.successor_cluster = self.clusters[0] if self.clusters else None
+        """Update successor cluster (city > farms > biggest)."""
+        # Priority 1: Cluster with city
+        self.successor_cluster = self._get_cluster_with_city()
+        if self.successor_cluster is not None:
             return
-        # Find cluster with most hexes from original province
-        best_cluster = None
-        best_count = 0
+        # Priority 2: Cluster with most farms
+        self.successor_cluster = self._get_cluster_with_most_farms()
+        if self.successor_cluster is not None:
+            return
+        # Priority 3: Biggest cluster
+        self.successor_cluster = self._get_biggest_cluster()
+    
+    def _get_cluster_with_city(self) -> Optional[PrwCluster]:
+        """Get cluster with a city."""
         for cluster in self.clusters:
-            count = sum(1 for h in cluster.hexes if self.modified_province.contains(h))
-            if count > best_count:
-                best_count = count
+            if cluster.has_city():
+                return cluster
+        return None
+    
+    def _get_cluster_with_most_farms(self) -> Optional[PrwCluster]:
+        """Get cluster with most farms."""
+        best_cluster = None
+        max_farms = -1
+        for cluster in self.clusters:
+            farms = cluster.count_farms()
+            if best_cluster is None or farms > max_farms:
                 best_cluster = cluster
-        self.successor_cluster = best_cluster or (self.clusters[0] if self.clusters else None)
+                max_farms = farms
+        return best_cluster if max_farms > 0 else None
+    
+    def _get_biggest_cluster(self) -> Optional[PrwCluster]:
+        """Get biggest cluster."""
+        biggest_cluster = None
+        for cluster in self.clusters:
+            if biggest_cluster is None or len(cluster.hexes) > len(biggest_cluster.hexes):
+                biggest_cluster = cluster
+        return biggest_cluster
 
     def _modify_province_to_match_successor_cluster(self) -> None:
         """Modify province to match successor cluster."""
         if not self.modified_province or not self.successor_cluster:
             return
-        # Remove hexes not in successor cluster
+        # Mark hexes in successor cluster
+        for hex in self.modified_province.get_hexes():
+            hex.flag = False
+        for hex in self.successor_cluster.hexes:
+            hex.flag = True
+        # Remove hexes not in successor cluster (iterate backwards to avoid index issues)
         hexes_to_remove = [
             h
             for h in self.modified_province.get_hexes()
-            if h not in self.successor_cluster.hexes
+            if not h.flag
         ]
         for h in hexes_to_remove:
             self.modified_province.remove_hex(h)
+        # Remove province if it has less than 2 hexes
+        if len(self.modified_province.get_hexes()) < 2:
+            self.provinces_manager.remove_province(self.modified_province)
 
     def _make_provinces_for_rest_of_clusters(self) -> None:
         """Create new provinces for remaining clusters."""
         for cluster in self.clusters:
             if cluster == self.successor_cluster:
                 continue
-            if len(cluster.hexes) < 1:
+            # Only create provinces for clusters with at least 2 hexes (matching Java)
+            if len(cluster.hexes) < 2:
                 continue
             province = self.provinces_manager.add_province()
             for hex in cluster.hexes:
@@ -432,6 +475,8 @@ class ProvincesManager(IEventListener):
         self.reduction_worker = ProvincesReductionWorker(self)
         self.current_id = 0
         self._name_generator = SimpleNameGenerator()
+        self._previous_color: Optional[HColor] = None
+        self._temp_unit_move_event: Optional[AbstractEvent] = None
 
     def add_province(self) -> Province:
         """Add a new province."""
@@ -505,23 +550,209 @@ class ProvincesManager(IEventListener):
         return None
 
     def on_event_validated(self, event: AbstractEvent) -> None:
-        """Handle event validated."""
-        pass
+        """Handle event validated (before application)."""
+        from core.events import EventPieceBuild, EventUnitMove
+        from core.core_utils import is_unit
+        
+        # Track previous color for events that change hex color
+        if event.get_type() == EventType.PIECE_BUILD:
+            if isinstance(event, EventPieceBuild) and event.hex:
+                if is_unit(event.piece_type):
+                    # Store previous color before it changes
+                    self._previous_color = event.hex.color
+                else:
+                    self._previous_color = None
+        elif event.get_type() == EventType.UNIT_MOVE:
+            # Track previous color for unit moves that change hex color
+            if isinstance(event, EventUnitMove) and event.finish:
+                if event.are_color_transfer_conditions_satisfied():
+                    # Store the event and previous color for later use
+                    self._temp_unit_move_event = event
+                    self._previous_color = event.finish.color
+                else:
+                    self._temp_unit_move_event = None
+                    self._previous_color = None
+        else:
+            self._previous_color = None
+            self._temp_unit_move_event = None
 
     def on_event_applied(self, event: AbstractEvent) -> None:
         """Handle event applied."""
-        from core.events import EventHexChangeColor
+        from core.events import EventHexChangeColor, EventPieceBuild, EventUnitMove
+        from core.core_utils import is_unit
+        from core.enums import HColor
 
         if event.get_type() == EventType.HEX_CHANGE_COLOR:
             if isinstance(event, EventHexChangeColor):
-                previous_color = None
-                if event.hex:
-                    # Need to track previous color - this is a simplification
-                    # In full implementation, we'd track this properly
-                    pass
-                # Trigger reduction worker
-                if event.hex and previous_color:
-                    self.reduction_worker.on_hex_color_changed(event.hex, previous_color)
+                previous_color = getattr(self, '_previous_color', None)
+                if event.hex and previous_color is not None and previous_color != event.hex.color:
+                    # Hex color changed - need to update provinces
+                    # First handle reduction (if hex was part of a province)
+                    if previous_color != HColor.GRAY:
+                        self.reduction_worker.on_hex_color_changed(event.hex, previous_color)
+                    # Then handle enlargement (add hex to adjacent province of new color)
+                    if event.hex.color != HColor.GRAY:
+                        self._enlarge_province_for_hex(event.hex)
+        elif event.get_type() == EventType.UNIT_MOVE:
+            # Handle unit moves that change hex color (color transfer)
+            if isinstance(event, EventUnitMove) and event.finish:
+                # Check if this is the temp event we stored (color transfer occurred)
+                if (hasattr(self, '_temp_unit_move_event') and 
+                    self._temp_unit_move_event is not None and
+                    self._temp_unit_move_event == event):
+                    # Color transfer occurred - update provinces
+                    previous_color = getattr(self, '_previous_color', None)
+                    if previous_color is not None and previous_color != event.finish.color:
+                        # Hex color changed - need to update provinces
+                        # First handle reduction (if hex was part of a province)
+                        if previous_color != HColor.GRAY:
+                            self.reduction_worker.on_hex_color_changed(event.finish, previous_color)
+                        # Then handle enlargement (add hex to adjacent province of new color)
+                        if event.finish.color != HColor.GRAY:
+                            self._enlarge_province_for_hex(event.finish)
+                    # Clear temp event
+                    self._temp_unit_move_event = None
+                # Also handle the case where color transfer happened but we didn't track it
+                # (fallback: check if finish hex color changed)
+                elif event.are_color_transfer_conditions_satisfied():
+                    # Color transfer occurred - check if hex color actually changed
+                    # This is a fallback in case the temp event tracking didn't work
+                    if event.finish.color != HColor.GRAY:
+                        # Try to find adjacent province and add hex to it
+                        self._enlarge_province_for_hex(event.finish)
+        elif event.get_type() == EventType.PIECE_BUILD:
+            # Handle unit builds that change hex color (e.g., building on gray hex)
+            if isinstance(event, EventPieceBuild) and event.hex:
+                if is_unit(event.piece_type):
+                    previous_color = getattr(self, '_previous_color', None)
+                    if previous_color is not None and previous_color != event.hex.color:
+                        # Hex color changed - need to update provinces
+                        # First handle reduction (if hex was part of a province)
+                        if previous_color != HColor.GRAY:
+                            self.reduction_worker.on_hex_color_changed(event.hex, previous_color)
+                        # Then handle enlargement (add hex to adjacent province of new color)
+                        if event.hex.color != HColor.GRAY:
+                            self._enlarge_province_for_hex(event.hex)
+
+    def _enlarge_province_for_hex(self, hex: Hex) -> None:
+        """Enlarge province to include hex (when hex color changes to match adjacent province)."""
+        # Find adjacent provinces of the same color
+        adjacent_provinces = []
+        for adj_hex in hex.adjacent_hexes:
+            if adj_hex.color == hex.color:
+                province = adj_hex.get_province()
+                if province and province.get_color() == hex.color:
+                    if province not in adjacent_provinces:
+                        adjacent_provinces.append(province)
+        
+        if len(adjacent_provinces) == 0:
+            # No adjacent province found - create new province for this hex
+            # (This should only happen if hex is isolated)
+            if hex.color != HColor.GRAY:
+                province = self.add_province()
+                province.add_hex(hex)
+        elif len(adjacent_provinces) == 1:
+            # Single adjacent province - add hex to it
+            adjacent_provinces[0].add_hex(hex)
+        else:
+            # Multiple adjacent provinces - merge into largest and add hex
+            largest_province = max(adjacent_provinces, key=lambda p: len(p.get_hexes()))
+            largest_province.add_hex(hex)
+            # Merge other provinces into largest
+            for province in adjacent_provinces:
+                if province == largest_province:
+                    continue
+                # Transfer hexes and money
+                for h in province.get_hexes():
+                    largest_province.add_hex(h)
+                largest_province.set_money(largest_province.get_money() + province.get_money())
+                self.remove_province(province)
+            
+            # After merging, ensure only one city remains in the merged province
+            # This matches the original game's checkToRemoveExcessiveCities() logic
+            self._remove_excessive_cities(largest_province)
+
+    def _remove_excessive_cities(self, province: Province) -> None:
+        """
+        Remove excessive cities from a province, keeping only one.
+        
+        This matches the original game's checkToRemoveExcessiveCities() method.
+        When multiple cities exist, removes cities one by one until only one remains.
+        The city with the least adjacent farms is removed first (keeping the one with most farms).
+        """
+        if not province or not self.core_model:
+            return
+        
+        # Find all cities in the province
+        city_hexes = []
+        for hex in province.get_hexes():
+            if hex.piece == PieceType.CITY:
+                city_hexes.append(hex)
+        
+        # Remove cities until only one remains
+        max_iterations = 1000  # Safety limit
+        iteration = 0
+        while len(city_hexes) >= 2 and iteration < max_iterations:
+            iteration += 1
+            
+            # Find the city with the least adjacent farms (to remove it)
+            city_to_remove = self._find_city_with_least_adjacent_farms(city_hexes)
+            if city_to_remove:
+                # Delete the city piece
+                delete_event = self.core_model.events_manager.factory.create_event(EventType.PIECE_DELETE)
+                from core.events import EventPieceDelete
+                if isinstance(delete_event, EventPieceDelete):
+                    delete_event.set_hex(city_to_remove)
+                    self.core_model.events_manager.apply_event(delete_event)
+                
+                # Remove from list
+                city_hexes.remove(city_to_remove)
+            else:
+                # If we can't find a city to remove, just remove the first one
+                if city_hexes:
+                    city_to_remove = city_hexes[0]
+                    delete_event = self.core_model.events_manager.factory.create_event(EventType.PIECE_DELETE)
+                    from core.events import EventPieceDelete
+                    if isinstance(delete_event, EventPieceDelete):
+                        delete_event.set_hex(city_to_remove)
+                        self.core_model.events_manager.apply_event(delete_event)
+                    city_hexes.remove(city_to_remove)
+
+    def _find_city_with_least_adjacent_farms(self, city_hexes: List[Hex]) -> Optional[Hex]:
+        """
+        Find the city with the least number of adjacent friendly farms.
+        
+        This matches the original game's findCityWithLeastAmountOfAdjacentFarms() method.
+        """
+        if not city_hexes:
+            return None
+        
+        best_hex = None
+        min_farms = -1
+        
+        for hex in city_hexes:
+            farm_count = self._count_adjacent_friendly_farms(hex)
+            if best_hex is None or farm_count < min_farms:
+                best_hex = hex
+                min_farms = farm_count
+        
+        return best_hex
+
+    def _count_adjacent_friendly_farms(self, hex: Hex) -> int:
+        """
+        Count the number of adjacent friendly farms.
+        
+        This matches the original game's getNumberOfAdjacentFriendlyFarms() method.
+        """
+        count = 0
+        for adj_hex in hex.adjacent_hexes:
+            # Check if adjacent hex is same color (friendly)
+            if adj_hex.color != hex.color:
+                continue
+            # Check if it's a farm
+            if adj_hex.piece == PieceType.FARM:
+                count += 1
+        return count
 
     def get_listen_priority(self) -> int:
         """Get listener priority."""
@@ -581,6 +812,26 @@ class SimpleNameGenerator:
             "Kakko",
             "Kama",
             "Kakako",
+            "TheArmor",
+            "DigitalBlood",
+            "GrizzlyBreaker",
+            "AcidSnake",
+            "BlisteredOutlaws",
+            "InvaderPenguin",
+            "WarioRaptor",
+            "SuperboyFallout",
+            "FastClawDraw",
+            "SystemSnap",
+            "RedReaperSlice",
+            "CoolCobra",
+            "CutthroatRattler",
+            "BruisedKnuckles",
+            "HurricaneMachine",
+            "WarlockAdmiral",
+            "Damin",
+            "Cytos",
+            "Inkronos",
+            "Grumblemoor",
         ]
         self.index = 0
 

@@ -158,9 +158,15 @@ class RulesetDefaultV1(AbstractRuleset):
     def get_defense_value_hex(self, hex: Hex) -> int:
         """Get defense value for hex."""
         max_value = self.get_defense_value(hex.piece)
+        hex_province = hex.get_province()
         for adjacent_hex in hex.adjacent_hexes:
             if adjacent_hex.color != hex.color:
                 continue
+            # Only consider adjacent hexes in the same province
+            if hex_province is not None:
+                adjacent_province = adjacent_hex.get_province()
+                if adjacent_province != hex_province:
+                    continue
             value = self.get_defense_value(adjacent_hex.piece)
             if value > max_value:
                 max_value = value
@@ -270,9 +276,15 @@ class RulesetClassicV1(AbstractRuleset):
     def get_defense_value_hex(self, hex: Hex) -> int:
         """Get defense value for hex."""
         max_value = self.get_defense_value(hex.piece)
+        hex_province = hex.get_province()
         for adjacent_hex in hex.adjacent_hexes:
             if adjacent_hex.color != hex.color:
                 continue
+            # Only consider adjacent hexes in the same province
+            if hex_province is not None:
+                adjacent_province = adjacent_hex.get_province()
+                if adjacent_province != hex_province:
+                    continue
             value = self.get_defense_value(adjacent_hex.piece)
             if value > max_value:
                 max_value = value
@@ -363,9 +375,15 @@ class RulesetExperimentalV1(AbstractRuleset):
     def get_defense_value_hex(self, hex: Hex) -> int:
         """Get defense value for hex."""
         max_value = self.get_defense_value(hex.piece)
+        hex_province = hex.get_province()
         for adjacent_hex in hex.adjacent_hexes:
             if adjacent_hex.color != hex.color:
                 continue
+            # Only consider adjacent hexes in the same province
+            if hex_province is not None:
+                adjacent_province = adjacent_hex.get_province()
+                if adjacent_province != hex_province:
+                    continue
             value = self.get_defense_value(adjacent_hex.piece)
             if value > max_value:
                 max_value = value
@@ -456,9 +474,15 @@ class RulesetDuelV1(AbstractRuleset):
     def get_defense_value_hex(self, hex: Hex) -> int:
         """Get defense value for hex."""
         max_value = self.get_defense_value(hex.piece)
+        hex_province = hex.get_province()
         for adjacent_hex in hex.adjacent_hexes:
             if adjacent_hex.color != hex.color:
                 continue
+            # Only consider adjacent hexes in the same province
+            if hex_province is not None:
+                adjacent_province = adjacent_hex.get_province()
+                if adjacent_province != hex_province:
+                    continue
             value = self.get_defense_value(adjacent_hex.piece)
             if value > max_value:
                 max_value = value
