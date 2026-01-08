@@ -836,17 +836,24 @@ def api_game_valid_movement():
     game_state.move_zone_manager.update_for_unit(hex)
     
     # Filter valid hexes based on game rules
+    # Note: MoveZoneManager already filters based on can_hex_be_captured() for enemy hexes,
+    # so if a hex is in the move zone, it's either:
+    # 1. Empty or has tree/grave (same color)
+    # 2. Has an enemy unit that can be captured
+    # 3. Has a static piece (city/tower) that can be captured (if different color)
+    # 4. Has a friendly unit in same province (for merging)
     valid_hexes = []
-    from core.core_utils import get_merge_result
+    from core.core_utils import get_merge_result, get_strength
     from core.enums import PieceType
+    
+    unit_strength = get_strength(hex.piece)
     
     for move_hex in game_state.move_zone_manager.hexes:
         # Skip the start hex itself
         if move_hex == hex:
             continue
         
-        # Can move to empty hexes, trees, graves, or enemy units
-        # Can also move to friendly units in same province (for merging)
+        # Can move to empty hexes, trees, graves
         can_move = False
         
         if move_hex.is_empty():
@@ -861,6 +868,14 @@ def api_game_valid_movement():
             elif (move_hex.get_province() == hex.get_province() and 
                   get_merge_result(hex.piece, move_hex.piece) is not None):
                 can_move = True
+        elif move_hex.has_static_piece():
+            # Can move to enemy static pieces (cities, towers) if unit is strong enough
+            if move_hex.color != hex.color:
+                # Check if unit can capture this static piece
+                if game_state.ruleset.can_hex_be_captured(move_hex, unit_strength):
+                    can_move = True
+            # Can move to friendly static pieces only if they're trees or graves
+            # (already handled above)
         
         if can_move:
             valid_hexes.append({
