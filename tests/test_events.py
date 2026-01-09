@@ -27,6 +27,8 @@ class MockCoreModel:
         self.turns_manager = None
         self.provinces_manager = None
         self.hexes = []
+        # Mock game_end_manager to prevent "Game has ended" errors in tests
+        self.game_end_manager = MockGameEndManager()
 
     def get_hex_with_same_coordinates(self, hex: Hex) -> Hex | None:
         """Find hex with same coordinates."""
@@ -34,6 +36,22 @@ class MockCoreModel:
             if h.has_same_coordinates_as(hex):
                 return h
         return None
+
+
+class MockGameEndManager:
+    """Mock game end manager for testing."""
+
+    def __init__(self):
+        self.game_ended = False
+        self.dead_players = set()
+
+    def is_player_dead(self, color):
+        """Check if player is dead."""
+        return color in self.dead_players
+
+    def can_make_turn(self):
+        """Check if turn can be made."""
+        return not self.game_ended
 
 
 class MockTurnsManager:
@@ -56,6 +74,13 @@ class MockProvincesManager:
     def get_province(self, province_id: int):
         """Get province by ID."""
         return self.provinces.get(province_id)
+    
+    def get_province_by_color(self, color):
+        """Get province by color (returns first matching)."""
+        for province in self.provinces.values():
+            if province.get_color() == color:
+                return province
+        return None
 
 
 class MockProvince:

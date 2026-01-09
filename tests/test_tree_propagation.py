@@ -117,6 +117,13 @@ class MockProvincesManager:
             if province.get_id() == province_id:
                 return province
         return None
+    
+    def get_province_by_color(self, color):
+        """Get province by color (returns first matching)."""
+        for province in self.provinces:
+            if province.get_color() == color:
+                return province
+        return None
 
 
 class MockGameState:
@@ -137,6 +144,9 @@ class MockGameState:
         # Store original level code for seed generation
         self._original_level_code = "test_level_code"
         self._rng_state = None
+        # Create game end manager (real one, but it won't mark games as ended for single-player scenarios)
+        from core.game_end_manager import GameEndManager
+        self.game_end_manager = GameEndManager(self)
 
 
 class TestTreePropagation:

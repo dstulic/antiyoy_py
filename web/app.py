@@ -298,13 +298,18 @@ def api_game_state():
         turn_index = getattr(game_state.turns_manager, 'turn_index', 0)
         lap = getattr(game_state.turns_manager, 'lap', 0)
     
+    # Calculate percentage of hexes owned by current player
+    hex_stats = game_state.get_hex_ownership_stats(current_player_color)
+    owned_hex_percentage = hex_stats['percentage']
+    
     return jsonify({
         'success': True,
         'hexes': hexes,
         'entities': entities,
         'current_color': current_color_value,
         'turn_index': game_state.turns_manager.turn_index if game_state.turns_manager else 0,
-        'lap': game_state.turns_manager.lap if game_state.turns_manager else 0
+        'lap': game_state.turns_manager.lap if game_state.turns_manager else 0,
+        'owned_hex_percentage': round(owned_hex_percentage, 1)
     })
 
 
@@ -1185,6 +1190,77 @@ def api_game_end_turn():
         })
     else:
         return jsonify({'success': False, 'error': error or 'Failed to end turn'}), 400
+
+
+@app.route('/api/game/win-lose-status', methods=['GET'])
+def api_game_win_lose_status():
+    """Check if current player has won or lost."""
+    session_id = session.get('session_id')
+    if not session_id or session_id not in game_sessions:
+        return jsonify({'success': False, 'error': 'No active game session'}), 404
+    
+    session_data = game_sessions[session_id]
+    game_state = session_data.get('game_state')
+    
+    if game_state is None:
+        return jsonify({'success': False, 'error': 'Game state not available'}), 500
+    
+    # Get current player
+    current_entity = game_state.entities_manager.get_current_entity()
+    if not current_entity:
+        return jsonify({'success': False, 'error': 'No current player'}), 400
+    
+    current_color = current_entity.color
+    
+    # Check lose condition (no provinces)
+    is_dead = game_state.game_end_manager.check_player_lose(current_color)
+    
+    # Check win condition (all opponents dead OR 80% hexes)
+    has_won = False
+    if not is_dead:
+        has_won = game_state.game_end_manager.check_player_win(current_color)
+    
+    return jsonify({
+        'success': True,
+        'is_dead': is_dead,
+        'has_won': has_won,
+        'current_color': current_color.value if hasattr(current_color, 'value') else str(current_color)
+    })
+
+
+@app.route('/api/game/continue-after-lose', methods=['POST'])
+def api_game_continue_after_lose():
+    """Continue game after player loses (game continues for other players)."""
+    session_id = session.get('session_id')
+    if not session_id or session_id not in game_sessions:
+        return jsonify({'success': False, 'error': 'No active game session'}), 404
+    
+    session_data = game_sessions[session_id]
+    game_state = session_data.get('game_state')
+    
+    if game_state is None:
+        return jsonify({'success': False, 'error': 'Game state not available'}), 500
+    
+    # Process AI turns to get to next human player
+    if game_state.ai_manager:
+        game_state.ai_manager.process_ai_turns()
+    
+    return jsonify({'success': True, 'message': 'Game continues'})
+
+
+@app.route('/api/game/continue-after-win', methods=['POST'])
+def api_game_continue_after_win():
+    """Continue after player wins (return to landing page)."""
+    session_id = session.get('session_id')
+    if not session_id or session_id not in game_sessions:
+        return jsonify({'success': False, 'error': 'No active game session'}), 404
+    
+    # Clear the session
+    if session_id in game_sessions:
+        del game_sessions[session_id]
+    session.pop('session_id', None)
+    
+    return jsonify({'success': True, 'message': 'Returning to main menu'})
 
 
 @app.route('/api/game/defense-indicators', methods=['POST'])

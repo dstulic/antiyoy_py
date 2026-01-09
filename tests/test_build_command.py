@@ -55,6 +55,13 @@ class MockProvincesManager:
             if province.get_id() == province_id:
                 return province
         return None
+    
+    def get_province_by_color(self, color):
+        """Get province by color (returns first matching)."""
+        for province in self.provinces:
+            if province.get_color() == color:
+                return province
+        return None
 
 
 class MockEntitiesManager:
@@ -150,6 +157,8 @@ def create_mock_game_state(hexes, provinces, current_color: HColor, ruleset=None
     game_state.events_manager = MockEventsManager(game_state)
     game_state.fog_of_war_manager = MockFogOfWarManager(enabled=False)
     game_state.readiness_manager = MockReadinessManager()
+    # Mock game_end_manager to prevent "Game has ended" errors in tests
+    game_state.game_end_manager = MockGameEndManager()
     
     # Mock get_hex method
     def get_hex(c1, c2):
@@ -170,6 +179,22 @@ def create_mock_game_state(hexes, provinces, current_color: HColor, ruleset=None
     game_state.get_id_for_new_unit = get_id_for_new_unit
     
     return game_state
+
+
+class MockGameEndManager:
+    """Mock game end manager for testing."""
+
+    def __init__(self):
+        self.game_ended = False
+        self.dead_players = set()
+
+    def is_player_dead(self, color):
+        """Check if player is dead."""
+        return color in self.dead_players
+
+    def can_make_turn(self):
+        """Check if turn can be made."""
+        return not self.game_ended
 
 
 def create_test_hex(c1, c2, color: HColor, piece: PieceType = None):

@@ -19,6 +19,24 @@ class MockCoreModel:
         self.entities_manager = None
         self.turns_manager = None
         self.provinces_manager = None
+        # Mock game_end_manager to prevent "Game has ended" errors in tests
+        self.game_end_manager = MockGameEndManager()
+
+
+class MockGameEndManager:
+    """Mock game end manager for testing."""
+
+    def __init__(self):
+        self.game_ended = False
+        self.dead_players = set()
+
+    def is_player_dead(self, color):
+        """Check if player is dead."""
+        return color in self.dead_players
+
+    def can_make_turn(self):
+        """Check if turn can be made."""
+        return not self.game_ended
 
 
 class MockEventsManager:
