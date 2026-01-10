@@ -144,13 +144,12 @@ function updateSoundToggleUI() {
 
 // Initialize game when page loads
 document.addEventListener('DOMContentLoaded', function() {
-    // Initialize game session
-    fetch(`/api/game/init/${levelIndex}`)
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                gameSessionId = data.session_id;
-                console.log('Game initialized:', gameSessionId);
+    // First, check if there's an existing session (e.g., from a loaded game)
+    fetch('/api/game/state')
+        .then(response => {
+            if (response.ok) {
+                // Session exists - use it (e.g., from a loaded game)
+                console.log('Using existing game session');
                 
                 // Hide loading message
                 const loadingDiv = document.querySelector('.game-loading');
@@ -161,20 +160,45 @@ document.addEventListener('DOMContentLoaded', function() {
                 // Initialize game board rendering
                 initializeGameBoard();
                 
-                // Load initial game state and auto-select city hex
+                // Load game state and auto-select city hex
                 loadGameState().then(() => {
                     autoSelectCityHex();
                 });
-                
-                // Polling disabled for now - game state only updates on user actions
-                // Can be re-enabled later for AI turns or multiplayer
-                // startGameStatePolling();
             } else {
-                alert('Failed to initialize game: ' + (data.error || 'Unknown error'));
+                // No session exists - initialize new game from campaign level
+                console.log('No existing session, initializing new game');
+                return fetch(`/api/game/init/${levelIndex}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            gameSessionId = data.session_id;
+                            console.log('Game initialized:', gameSessionId);
+                            
+                            // Hide loading message
+                            const loadingDiv = document.querySelector('.game-loading');
+                            if (loadingDiv) {
+                                loadingDiv.style.display = 'none';
+                            }
+                            
+                            // Initialize game board rendering
+                            initializeGameBoard();
+                            
+                            // Load initial game state and auto-select city hex
+                            loadGameState().then(() => {
+                                autoSelectCityHex();
+                            });
+                            
+                            // Polling disabled for now - game state only updates on user actions
+                            // Can be re-enabled later for AI turns or multiplayer
+                            // startGameStatePolling();
+                        } else {
+                            alert('Failed to initialize game: ' + (data.error || 'Unknown error'));
+                        }
+                    });
             }
         })
         .catch(error => {
-            console.error('Error initializing game:', error);
+            console.error('Error checking/initializing game:', error);
             alert('Error initializing game');
         });
 });
@@ -325,6 +349,9 @@ function handleUnitMove(startHex, finishHex) {
                             updateProvinceStatus(updatedHex);
                         }
                     }
+                    
+                    // Check win/lose status after unit move
+                    checkWinLoseStatus();
                 });
             }, animationDuration); // Wait for animation to complete
         } else {
@@ -376,6 +403,9 @@ function loadGameState() {
                     console.log('loadGameState: No current_color in response');
                 }
                 
+                // Update status bar with owned hex percentage and turn counter
+                updateStatusBar(data);
+                
                 // Clear completed animations AFTER hexes are updated (seamless transition)
                 // Use a small delay to ensure the animation loop has rendered the updated hexes
                 setTimeout(() => {
@@ -389,6 +419,9 @@ function loadGameState() {
                         gameBoard.render();
                     }
                 }, 50); // Small delay to ensure seamless transition
+                
+                // Check win/lose status after loading game state
+                checkWinLoseStatus();
             } else {
                 console.error('Failed to load game state:', data);
             }
@@ -398,6 +431,21 @@ function loadGameState() {
             console.error('Error loading game state:', error);
             throw error;
         });
+}
+
+function updateStatusBar(data) {
+    // Update owned hex percentage
+    const statusOwnedHex = document.getElementById('statusOwnedHex');
+    if (statusOwnedHex && data.owned_hex_percentage !== undefined) {
+        statusOwnedHex.textContent = data.owned_hex_percentage.toFixed(1) + '%';
+    }
+    
+    // Update turn counter
+    const statusTurn = document.getElementById('statusTurn');
+    if (statusTurn && data.lap !== undefined) {
+        // Turn counter is lap + 1 (since lap starts at 0)
+        statusTurn.textContent = (data.lap + 1).toString();
+    }
 }
 
 function autoSelectCityHex() {
@@ -579,6 +627,85 @@ function undoAction() {
     .catch(error => {
         console.error('Error during undo:', error);
         alert('Error: ' + error.message);
+    });
+}
+
+function checkWinLoseStatus() {
+    fetch('/api/game/win-lose-status')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                if (data.is_dead) {
+                    showLoseModal();
+                } else if (data.has_won) {
+                    showWinModal();
+                }
+            }
+        })
+        .catch(error => {
+            console.error('Error checking win/lose status:', error);
+        });
+}
+
+function showLoseModal() {
+    const modal = document.getElementById('loseModal');
+    if (modal) {
+        modal.style.display = 'flex';
+    }
+}
+
+function showWinModal() {
+    const modal = document.getElementById('winModal');
+    if (modal) {
+        modal.style.display = 'flex';
+    }
+}
+
+function continueAfterLose() {
+    fetch('/api/game/continue-after-lose', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            const modal = document.getElementById('loseModal');
+            if (modal) {
+                modal.style.display = 'none';
+            }
+            // Reload game state to continue with other players
+            loadGameState();
+        } else {
+            alert('Error continuing game: ' + (data.error || 'Unknown error'));
+        }
+    })
+    .catch(error => {
+        console.error('Error continuing after lose:', error);
+        alert('Error continuing game');
+    });
+}
+
+function continueAfterWin() {
+    fetch('/api/game/continue-after-win', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        }
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            // Redirect to landing page
+            window.location.href = '/';
+        } else {
+            alert('Error continuing after win: ' + (data.error || 'Unknown error'));
+        }
+    })
+    .catch(error => {
+        console.error('Error continuing after win:', error);
+        alert('Error continuing after win');
     });
 }
 
@@ -889,6 +1016,9 @@ function handlePlacementBuild(hex, pieceType) {
                         showBuildMenu(updatedHex);
                     }
                 }
+                
+                // Check win/lose status after build
+                checkWinLoseStatus();
             }).catch(error => {
                 console.error('Error reloading game state:', error);
             });

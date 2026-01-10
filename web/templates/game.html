@@ -18,15 +18,23 @@
             </button>
             <div class="status-items-container">
                 <div class="status-item">
+                    <span class="status-label" id="statusCityName"></span>
+                </div>
+                <div class="status-item">
                     <span class="status-label">Funds:</span>
                     <span class="status-value" id="statusFunds">0</span>
                 </div>
                 <div class="status-item">
-                    <span class="status-label">Turn Profit:</span>
+                    <span class="status-label">Profit:</span>
                     <span class="status-value" id="statusProfit">0</span>
                 </div>
                 <div class="status-item">
-                    <span class="status-label" id="statusCityName"></span>
+                    <span class="status-label">Owned:</span>
+                    <span class="status-value" id="statusOwnedHex">0%</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Turn:</span>
+                    <span class="status-value" id="statusTurn">0</span>
                 </div>
             </div>
         </div>
@@ -75,6 +83,35 @@
         <div class="game-board" id="gameBoard">
             <div class="game-loading">
                 <p>Loading game...</p>
+            </div>
+        </div>
+        
+        <!-- Win/Lose Modals -->
+        <div id="loseModal" class="game-modal-overlay" style="display: none;">
+            <div class="game-modal-dialog">
+                <div class="game-modal-header">
+                    <h2>You died!</h2>
+                </div>
+                <div class="game-modal-body">
+                    <p>The game will continue for other players.</p>
+                </div>
+                <div class="game-modal-footer">
+                    <button class="game-modal-button" onclick="continueAfterLose()">Continue</button>
+                </div>
+            </div>
+        </div>
+        
+        <div id="winModal" class="game-modal-overlay" style="display: none;">
+            <div class="game-modal-dialog">
+                <div class="game-modal-header">
+                    <h2>You win!</h2>
+                </div>
+                <div class="game-modal-body">
+                    <p>Congratulations on your victory!</p>
+                </div>
+                <div class="game-modal-footer">
+                    <button class="game-modal-button" onclick="continueAfterWin()">Continue</button>
+                </div>
             </div>
         </div>
     </div>

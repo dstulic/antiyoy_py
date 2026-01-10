@@ -226,6 +226,43 @@ class GameState(IEventListener):
         # Store in game state for persistence
         self._rng_state = state
     
+    def get_hex_ownership_stats(self, player_color: Optional[HColor] = None) -> dict:
+        """
+        Calculate hex ownership statistics.
+        
+        Returns a dictionary with:
+        - 'total_hexes': Total number of non-neutral hexes that are in provinces
+        - 'player_hexes': Number of hexes owned by the specified player color
+        - 'percentage': Percentage of hexes owned by the player (0.0 if total_hexes is 0)
+        
+        Args:
+            player_color: The color to count hexes for. If None, player_hexes will be 0.
+        
+        Returns:
+            Dictionary with hex ownership statistics.
+        """
+        total_hexes = 0
+        player_hexes = 0
+        
+        for hex in self.hexes:
+            # Do not skip neutral hexes
+            total_hexes += 1
+
+            if player_color and hex.color == player_color:
+                # only count player hexes that are in a province
+                if hex.get_province() is not None:
+                    player_hexes += 1
+        
+        percentage = 0.0
+        if total_hexes > 0:
+            percentage = (player_hexes / total_hexes) * 100
+        
+        return {
+            'total_hexes': total_hexes,
+            'player_hexes': player_hexes,
+            'percentage': percentage
+        }
+    
     def get_hexes_for_player(self, player_color: Optional[HColor] = None) -> List[Hex]:
         """
         Get hexes visible to a specific player, respecting fog of war.

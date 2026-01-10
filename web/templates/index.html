@@ -63,7 +63,10 @@
                                             <div class="save-name">${save.name}</div>
                                             <div class="save-date">${save.date}</div>
                                         </div>
-                                        <button class="save-load-btn" onclick="loadGame('${save.name}')">Load</button>
+                                        <div class="save-actions">
+                                            <button class="save-load-btn" onclick="loadGame('${save.name}')">Load</button>
+                                            <button class="save-delete-btn" onclick="deleteGame('${save.name}')">Delete</button>
+                                        </div>
                                     `;
                                     savesList.appendChild(saveItem);
                                 });
@@ -96,6 +99,33 @@
                     .catch(error => {
                         console.error('Error loading game:', error);
                         alert('Error loading game');
+                    });
+                }
+                
+                function deleteGame(saveName) {
+                    if (!confirm(`Are you sure you want to delete "${saveName}"? This action cannot be undone.`)) {
+                        return;
+                    }
+                    
+                    fetch('/api/game/delete-save', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ save_name: saveName })
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            // Reload the saves list to reflect the deletion
+                            loadSavesList();
+                        } else {
+                            alert('Failed to delete game: ' + (data.error || 'Unknown error'));
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error deleting game:', error);
+                        alert('Error deleting game');
                     });
                 }
                 

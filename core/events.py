@@ -252,13 +252,37 @@ class EventUnitMove(AbstractEvent):
         return EventType.UNIT_MOVE
 
     def is_valid(self) -> bool:
-        """Check if event is valid."""
+        """
+        Check if event is valid.
+        
+        This matches the original game's EventUnitMove.isValid() method.
+        """
         if self.start is None or self.finish is None:
             return False
         if not self.start.has_unit():
             return False
-        # Additional validation would require core_model access
-        # For now, basic checks
+        
+        # Check if start hex has a province (required for tree cutting)
+        if self.start.get_province() is None and self.finish.has_tree():
+            return False
+        
+        # Check readiness (if not quick event)
+        if not self.is_quick() and self.core_model and self.core_model.readiness_manager:
+            if not self.core_model.readiness_manager.is_ready(self.start):
+                return False
+        
+        # Check move zone for color transfer (enemy hex capture)
+        if self.are_color_transfer_conditions_satisfied():
+            if self.core_model and self.core_model.move_zone_manager:
+                self.core_model.move_zone_manager.update_for_unit(self.start)
+                if not self.core_model.move_zone_manager.contains(self.finish):
+                    return False
+        
+        # Check same-color static piece movement (only trees and graves allowed)
+        if self.start.color == self.finish.color and self.finish.has_static_piece():
+            from core.enums import PieceType
+            return self.finish.has_tree() or self.finish.piece == PieceType.GRAVE
+        
         return True
 
     def apply_change(self) -> None:

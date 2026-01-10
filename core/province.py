@@ -1,9 +1,10 @@
 """Province management for the game."""
 
-from typing import Optional, List, Callable
+import random
+from typing import Optional, List, Callable, Dict
 from core.hex import Hex
 from core.enums import HColor, PieceType
-from core.events import IEventListener, AbstractEvent
+from core.events import IEventListener, AbstractEvent, EventPieceAdd, EventPieceDelete
 from core.enums import EventType
 
 
@@ -325,7 +326,17 @@ class ProvincesReductionWorker:
             return
         self.modified_hex = hex
         self.previous_color = previous_color
-        self.modified_province = hex.get_province()
+        # Get province that contains this hex
+        # The hex color may have already changed, so we can't rely on hex.get_province()
+        # Instead, search through all provinces to find one that contains this hex
+        # Note: We check if the hex is in the province, not the province's current color,
+        # because the province's color might have changed when the hex color changed
+        self.modified_province = None
+        if self.provinces_manager.core_model:
+            for province in self.provinces_manager.provinces:
+                if hex in province.get_hexes():
+                    self.modified_province = province
+                    break
         self._reset_flags()
         self._update_clusters()
         self._handle_simple_situations()
@@ -429,7 +440,13 @@ class ProvincesReductionWorker:
         return biggest_cluster
 
     def _modify_province_to_match_successor_cluster(self) -> None:
-        """Modify province to match successor cluster."""
+        """
+        Modify province to match successor cluster.
+        
+        This matches the original game's modifyProvinceToMatchSuccessorCluster() method.
+        Removes hexes not in the successor cluster, then removes the province if it has
+        less than 2 hexes (unless it has a city, which allows single-hex provinces).
+        """
         if not self.modified_province or not self.successor_cluster:
             return
         # Mark hexes in successor cluster
@@ -446,8 +463,13 @@ class ProvincesReductionWorker:
         for h in hexes_to_remove:
             self.modified_province.remove_hex(h)
         # Remove province if it has less than 2 hexes
-        if len(self.modified_province.get_hexes()) < 2:
-            self.provinces_manager.remove_province(self.modified_province)
+        # Exception: keep single-hex provinces if they have a city
+        remaining_hexes = self.modified_province.get_hexes()
+        if len(remaining_hexes) < 2:
+            # Check if the province has a city (allows single-hex provinces)
+            has_city = any(hex.piece == PieceType.CITY for hex in remaining_hexes)
+            if not has_city:
+                self.provinces_manager.remove_province(self.modified_province)
 
     def _make_provinces_for_rest_of_clusters(self) -> None:
         """Create new provinces for remaining clusters."""
@@ -460,6 +482,72 @@ class ProvincesReductionWorker:
             province = self.provinces_manager.add_province()
             for hex in cluster.hexes:
                 province.add_hex(hex)
+            
+            # If the new province doesn't have a city, add one
+            # This matches the original game's CityManager logic
+            if not cluster.has_city():
+                self._add_city_to_province(province)
+    
+    def _add_city_to_province(self, province: Province) -> None:
+        """
+        Add a city to a province that doesn't have one.
+        
+        This matches the original game's CityManager.doFixProvince() method.
+        Priority: empty hex > hex without tower > any hex
+        """
+        if not province or not self.provinces_manager.core_model:
+            return
+        
+        # Pick a hex for the city (matching original game's pickHexForCity logic)
+        hex_for_city = self._pick_hex_for_city(province)
+        if not hex_for_city:
+            return
+        
+        # Delete existing piece if any (matching original game)
+        if hex_for_city.has_piece():
+            delete_event = self.provinces_manager.core_model.events_manager.factory.create_event(EventType.PIECE_DELETE)
+            from core.events import EventPieceDelete
+            if isinstance(delete_event, EventPieceDelete):
+                delete_event.set_hex(hex_for_city)
+                self.provinces_manager.core_model.events_manager.apply_event(delete_event)
+        
+        # Add city
+        add_event = self.provinces_manager.core_model.events_manager.factory.create_event(EventType.PIECE_ADD)
+        if isinstance(add_event, EventPieceAdd):
+            add_event.set_hex(hex_for_city)
+            add_event.set_piece_type(PieceType.CITY)
+            self.provinces_manager.core_model.events_manager.apply_event(add_event)
+    
+    def _pick_hex_for_city(self, province: Province) -> Optional[Hex]:
+        """
+        Pick a hex for placing a city in a province.
+        
+        This matches the original game's CityManager.pickHexForCity() method.
+        Priority: random empty hex > random hex without tower > random hex
+        """
+        if not province:
+            return None
+        
+        hexes = province.get_hexes()
+        if not hexes:
+            return None
+        
+        # Priority 1: Try to find a random empty hex
+        empty_hexes = [h for h in hexes if not h.has_piece()]
+        if empty_hexes:
+            return random.choice(empty_hexes)
+        
+        # Priority 2: Try to find a random hex without a tower
+        hexes_without_tower = [h for h in hexes if h.piece != PieceType.TOWER and h.piece != PieceType.STRONG_TOWER]
+        if hexes_without_tower:
+            # Try up to 1000 times to find a random one (matching original game)
+            for _ in range(1000):
+                hex = random.choice(hexes_without_tower)
+                if hex.piece != PieceType.TOWER and hex.piece != PieceType.STRONG_TOWER:
+                    return hex
+        
+        # Priority 3: Return any random hex
+        return random.choice(hexes)
 
 
 class ProvincesManager(IEventListener):
@@ -551,7 +639,7 @@ class ProvincesManager(IEventListener):
 
     def on_event_validated(self, event: AbstractEvent) -> None:
         """Handle event validated (before application)."""
-        from core.events import EventPieceBuild, EventUnitMove
+        from core.events import EventPieceBuild, EventUnitMove, EventHexChangeColor
         from core.core_utils import is_unit
         
         # Track previous color for events that change hex color
@@ -572,6 +660,14 @@ class ProvincesManager(IEventListener):
                 else:
                     self._temp_unit_move_event = None
                     self._previous_color = None
+        elif event.get_type() == EventType.HEX_CHANGE_COLOR:
+            # Track previous color for hex color change events
+            if isinstance(event, EventHexChangeColor) and event.hex:
+                # Store previous color before it changes
+                # If _previous_color was already set (e.g., by test), keep it
+                # Otherwise, use the hex's current color
+                if self._previous_color is None:
+                    self._previous_color = event.hex.color
         else:
             self._previous_color = None
             self._temp_unit_move_event = None
@@ -585,14 +681,21 @@ class ProvincesManager(IEventListener):
         if event.get_type() == EventType.HEX_CHANGE_COLOR:
             if isinstance(event, EventHexChangeColor):
                 previous_color = getattr(self, '_previous_color', None)
-                if event.hex and previous_color is not None and previous_color != event.hex.color:
+                # Use the new color from the event, not the hex's current color
+                # (the hex color has already been changed by apply_change())
+                new_color = event.color if event.color else (event.hex.color if event.hex else None)
+                if event.hex and previous_color is not None and previous_color != new_color:
                     # Hex color changed - need to update provinces
                     # First handle reduction (if hex was part of a province)
                     if previous_color != HColor.GRAY:
                         self.reduction_worker.on_hex_color_changed(event.hex, previous_color)
                     # Then handle enlargement (add hex to adjacent province of new color)
-                    if event.hex.color != HColor.GRAY:
+                    if new_color != HColor.GRAY:
                         self._enlarge_province_for_hex(event.hex)
+                    # After province changes, ensure all provinces have cities
+                    # This matches the original game's CityManager.onHexColorChanged() logic
+                    if previous_color != HColor.GRAY:
+                        self._fix_provinces_without_cities()
         elif event.get_type() == EventType.UNIT_MOVE:
             # Handle unit moves that change hex color (color transfer)
             if isinstance(event, EventUnitMove) and event.finish:
@@ -610,6 +713,9 @@ class ProvincesManager(IEventListener):
                         # Then handle enlargement (add hex to adjacent province of new color)
                         if event.finish.color != HColor.GRAY:
                             self._enlarge_province_for_hex(event.finish)
+                        # After province changes, ensure all provinces have cities
+                        if previous_color != HColor.GRAY:
+                            self._fix_provinces_without_cities()
                     # Clear temp event
                     self._temp_unit_move_event = None
                 # Also handle the case where color transfer happened but we didn't track it
@@ -635,29 +741,70 @@ class ProvincesManager(IEventListener):
                             self._enlarge_province_for_hex(event.hex)
 
     def _enlarge_province_for_hex(self, hex: Hex) -> None:
-        """Enlarge province to include hex (when hex color changes to match adjacent province)."""
-        # Find adjacent provinces of the same color
-        adjacent_provinces = []
-        for adj_hex in hex.adjacent_hexes:
-            if adj_hex.color == hex.color:
-                province = adj_hex.get_province()
-                if province and province.get_color() == hex.color:
-                    if province not in adjacent_provinces:
-                        adjacent_provinces.append(province)
+        """
+        Enlarge province to include hex (when hex color changes to match adjacent province).
         
+        This matches the original game's ProvincesEnlargementWorker.onHexColorChanged() method.
+        Only processes hexes that are adjacent to hexes of the same color.
+        Also adds "previously lonely hexes" (adjacent hexes of same color not in any province).
+        """
+        # Skip gray hexes (matching original game)
+        if hex.color == HColor.GRAY:
+            return
+        
+        # Only process hexes that are adjacent to hexes of the same color
+        # This matches the original game's check: if (!hex.isAdjacentToHexesOfSameColor()) return;
+        if not hex.is_adjacent_to_hexes_of_same_color():
+            return
+        
+        # Update lists: find adjacent provinces and previously lonely hexes
+        # This matches the original game's updateLists() method
+        adjacent_provinces = []
+        previously_lonely_hexes = []
+        for adj_hex in hex.adjacent_hexes:
+            if adj_hex.color != hex.color:
+                continue
+            province = adj_hex.get_province()
+            if province and province.get_color() == hex.color:
+                if province not in adjacent_provinces:
+                    adjacent_provinces.append(province)
+            else:
+                # Adjacent hex of same color but not in any province (previously lonely)
+                previously_lonely_hexes.append(adj_hex)
+        
+        # Determine target province and add the modified hex
+        target_province = None
         if len(adjacent_provinces) == 0:
             # No adjacent province found - create new province for this hex
-            # (This should only happen if hex is isolated)
+            # Also add previously lonely hexes to the new province
             if hex.color != HColor.GRAY:
-                province = self.add_province()
-                province.add_hex(hex)
+                target_province = self.add_province()
+                target_province.add_hex(hex)
+                # Add previously lonely hexes (matching original game's makeTargetProvinceFromScratch)
+                for lonely_hex in previously_lonely_hexes:
+                    target_province.add_hex(lonely_hex)
         elif len(adjacent_provinces) == 1:
             # Single adjacent province - add hex to it
-            adjacent_provinces[0].add_hex(hex)
+            target_province = adjacent_provinces[0]
+            target_province.add_hex(hex)
+            # Add previously lonely hexes (matching original game's pourInPreviouslyLonelyHexes)
+            for lonely_hex in previously_lonely_hexes:
+                if lonely_hex.get_province() is None:
+                    target_province.add_hex(lonely_hex)
         else:
             # Multiple adjacent provinces - merge into largest and add hex
             largest_province = max(adjacent_provinces, key=lambda p: len(p.get_hexes()))
+            target_province = largest_province
             largest_province.add_hex(hex)
+            
+            # Before merging, track which province each city belongs to
+            # This is needed to update the city name after removing excessive cities
+            city_to_province_map = {}
+            for province in adjacent_provinces:
+                for h in province.get_hexes():
+                    if h.piece == PieceType.CITY:
+                        city_to_province_map[h] = province
+            
             # Merge other provinces into largest
             for province in adjacent_provinces:
                 if province == largest_province:
@@ -670,15 +817,40 @@ class ProvincesManager(IEventListener):
             
             # After merging, ensure only one city remains in the merged province
             # This matches the original game's checkToRemoveExcessiveCities() logic
-            self._remove_excessive_cities(largest_province)
+            # Also update the city name to match the province whose city is kept
+            self._remove_excessive_cities(largest_province, city_to_province_map)
+            
+            # Add previously lonely hexes (matching original game's pourInPreviouslyLonelyHexes)
+            for lonely_hex in previously_lonely_hexes:
+                if lonely_hex.get_province() is None:
+                    target_province.add_hex(lonely_hex)
 
-    def _remove_excessive_cities(self, province: Province) -> None:
+    def _fix_provinces_without_cities(self) -> None:
+        """
+        Ensure all provinces have at least one city.
+        
+        This matches the original game's CityManager.doFixProvincesWithoutCities() method.
+        Called after hex color changes to ensure provinces that lost their city get a new one.
+        """
+        for province in self.provinces:
+            # Check if province has a city
+            has_city = any(hex.piece == PieceType.CITY for hex in province.get_hexes())
+            if not has_city:
+                # Province doesn't have a city - add one
+                self.reduction_worker._add_city_to_province(province)
+
+    def _remove_excessive_cities(self, province: Province, city_to_province_map: Optional[Dict[Hex, Province]] = None) -> None:
         """
         Remove excessive cities from a province, keeping only one.
         
         This matches the original game's checkToRemoveExcessiveCities() method.
         When multiple cities exist, removes cities one by one until only one remains.
         The city with the least adjacent farms is removed first (keeping the one with most farms).
+        
+        Args:
+            province: The province to process
+            city_to_province_map: Optional map of city hex -> original province (before merging)
+                                 Used to update the province's city name to match the kept city's original province
         """
         if not province or not self.core_model:
             return
@@ -717,6 +889,15 @@ class ProvincesManager(IEventListener):
                         delete_event.set_hex(city_to_remove)
                         self.core_model.events_manager.apply_event(delete_event)
                     city_hexes.remove(city_to_remove)
+        
+        # After removing excessive cities, update the province's city name
+        # to match the province whose city was kept (if we have that information)
+        if city_to_province_map and len(city_hexes) == 1:
+            remaining_city = city_hexes[0]
+            if remaining_city in city_to_province_map:
+                original_province = city_to_province_map[remaining_city]
+                # Update the merged province's name to match the original province's name
+                province.set_city_name(original_province.get_city_name())
 
     def _find_city_with_least_adjacent_farms(self, city_hexes: List[Hex]) -> Optional[Hex]:
         """

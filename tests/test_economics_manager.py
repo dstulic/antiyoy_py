@@ -112,6 +112,13 @@ class MockProvincesManager:
     def __init__(self, provinces):
         """Initialize mock provinces manager."""
         self.provinces = provinces
+    
+    def get_province_by_color(self, color):
+        """Get province by color (returns first matching)."""
+        for province in self.provinces:
+            if province.get_color() == color:
+                return province
+        return None
 
 
 class MockGameState:
@@ -128,6 +135,9 @@ class MockGameState:
         # Create events manager
         self.events_manager = EventsManager(self)
         self.events_manager.factory = EventsFactory(self.events_manager)
+        # Create game end manager (real one, but it won't mark games as ended for single-player scenarios)
+        from core.game_end_manager import GameEndManager
+        self.game_end_manager = GameEndManager(self)
 
 
 class TestEconomicsManager:

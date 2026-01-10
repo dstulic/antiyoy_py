@@ -137,12 +137,41 @@ class TurnsManager(IEventListener):
         self.lap = source.lap
 
     def do_switch_turn_index(self) -> None:
-        """Switch to next turn."""
-        if self.is_turn_index_in_end_of_lap():
-            self.turn_index = 0
-            self.lap += 1
-        else:
-            self.turn_index += 1
+        """Switch to next turn, skipping dead players."""
+        if not self.core_model or not self.core_model.entities_manager:
+            # Fallback to simple switching if no entities manager
+            if self.is_turn_index_in_end_of_lap():
+                self.turn_index = 0
+                self.lap += 1
+            else:
+                self.turn_index += 1
+            return
+        
+        max_attempts = 100  # Prevent infinite loop
+        attempts = 0
+        
+        while attempts < max_attempts:
+            if self.is_turn_index_in_end_of_lap():
+                self.turn_index = 0
+                self.lap += 1
+            else:
+                self.turn_index += 1
+            
+            # Check if current player is dead (has no provinces)
+            current_entity = self.core_model.entities_manager.get_current_entity()
+            if current_entity is None:
+                break  # No entities, can't continue
+            
+            # Skip dead players (players with no provinces)
+            if self.core_model.game_end_manager:
+                if not self.core_model.game_end_manager.is_player_dead(current_entity.color):
+                    # Current player is alive, stop switching
+                    break
+            else:
+                # No game end manager, just stop
+                break
+            
+            attempts += 1
 
     def is_turn_index_in_end_of_lap(self) -> bool:
         """Check if turn index is at end of lap."""
@@ -300,12 +329,16 @@ class EntitiesManager(IEventListener):
             return False
         if not current_entity.is_human():
             return False
-        # Check if entity has provinces
+        # Check if entity has provinces (not dead)
         if (
             self.core_model
             and self.core_model.provinces_manager
             and self.core_model.provinces_manager.get_province_by_color(current_entity.color)
         ):
+            # Also check if player is not marked as dead
+            if self.core_model.game_end_manager:
+                if self.core_model.game_end_manager.is_player_dead(current_entity.color):
+                    return False
             return True
         return False
 

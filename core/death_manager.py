@@ -124,6 +124,11 @@ class DeathManager(IEventListener):
         """
         Kill units that are not in any province (lonely units).
         These can occur after aggressive moves or builds.
+        
+        Note: We should NOT kill units that are adjacent to hexes of the same color,
+        as they might be in the process of being added to a province by ProvincesManager.
+        This matches the original game's logic where ProvincesEnlargementWorker only
+        processes hexes that are adjacent to hexes of the same color.
         """
         for hex in self.game_state.hexes:
             # Skip neutral hexes
@@ -140,6 +145,12 @@ class DeathManager(IEventListener):
             
             # Only kill units
             if not hex.has_unit():
+                continue
+            
+            # Don't kill units that are adjacent to hexes of the same color
+            # These might be in the process of being added to a province
+            # This matches the original game's ProvincesEnlargementWorker logic
+            if hex.is_adjacent_to_hexes_of_same_color():
                 continue
             
             # This is a lonely unit - kill it
