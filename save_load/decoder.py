@@ -15,10 +15,11 @@ from save_load.format import (
     SECTION_FOG,
     SECTION_CORE_INIT,
     SECTION_RNG_STATE,
+    SECTION_EVENTS_LIST,
 )
 from core.game_state import GameState
 from core.enums import HColor, PieceType, RulesType, EntityType
-from core.events import EventsFactory
+from core.events import EventsFactory, AbstractEvent
 
 
 def _build_adjacency_graph(game_state: GameState) -> None:
@@ -98,6 +99,7 @@ class GameStateDecoder:
             self._decode_mail_basket(game_state, level_code)
             self._decode_fog(game_state, level_code)
             self._decode_rng_state(game_state, level_code)
+            self._decode_events_list(game_state, level_code)
             
             # Reinitialize TreeManager RNG with correct seed or restore saved state
             if hasattr(game_state, 'tree_manager') and game_state.tree_manager:
@@ -381,6 +383,184 @@ class GameStateDecoder:
         except Exception as e:
             print(f"Warning: Failed to decode RNG state: {e}")
             # If decoding fails, RNG will use seed from original level code
+    
+    def _decode_events_list(self, game_state: GameState, level_code: str) -> None:
+        """Decode events list (history)."""
+        from save_load.format import get_section, SECTION_EVENTS_LIST
+        source = get_section(level_code, SECTION_EVENTS_LIST)
+        if not source or source == "":
+            return
+        
+        # Parse the encoded events list
+        # Format: event1|author:color:name,event2|author:color:name,...
+        # Or Java format: event1,event2,... (without author info)
+        if not hasattr(game_state, 'history_manager') or not game_state.history_manager:
+            return
+        
+        # Clear existing history
+        game_state.history_manager.clear_all()
+        
+        # Parse events
+        events = source.split(",")
+        for event_str in events:
+            if not event_str.strip():
+                continue
+            
+            # Split event encoding from author (if present)
+            event_part = event_str
+            author_color = None
+            author_name = None
+            
+            if "|author:" in event_str:
+                event_part, author_part = event_str.split("|author:", 1)
+                
+                # Parse author
+                if author_part != "-":
+                    author_parts = author_part.split(":", 1)
+                    if len(author_parts) >= 1:
+                        try:
+                            from core.enums import HColor
+                            author_color = HColor(author_parts[0])
+                            if len(author_parts) >= 2:
+                                author_name = author_parts[1]
+                        except (ValueError, KeyError):
+                            pass
+            
+            # Decode event from event_part
+            # Event format: <key> <data>
+            from core.events import EventKeys
+            event_parts = event_part.strip().split(" ", 1)
+            if len(event_parts) < 1:
+                continue
+                
+            event_key = event_parts[0]
+            event_data = event_parts[1] if len(event_parts) > 1 else ""
+            
+            event_type = EventKeys.convert_key_to_type(event_key)
+            if not event_type:
+                continue
+            
+            # Create event
+            event = game_state.events_manager.factory.create_event(event_type)
+            if not event:
+                continue
+            
+            # Decode event data (event-specific decoding)
+            try:
+                self._restore_single_event(event, event_data, game_state)
+            except Exception as e:
+                # If decoding fails, skip this event
+                print(f"Warning: Failed to decode event {event_key}: {e}")
+                continue
+            
+            # Create history event
+            from core.history_manager import HistoryEvent
+            history_event = HistoryEvent(event, author_color, author_name)
+            # Add to events list (completed turns, since we're loading a saved game)
+            game_state.history_manager.events_list.append(history_event)
+    
+    def _restore_single_event(self, event: AbstractEvent, event_data: str, game_state: GameState) -> None:
+        """Restore a single event from its data string."""
+        from core.events import EventType
+        from core.enums import HColor
+        
+        event_type = event.get_type()
+        parts = event_data.split(" ") if event_data else []
+        
+        if event_type == EventType.TURN_END:
+            from core.events import EventTurnEnd
+            if isinstance(event, EventTurnEnd) and len(parts) >= 2:
+                try:
+                    time = int(parts[0]) if parts[0] else 0
+                    current_color = None if parts[1] == "null" else HColor(parts[1])
+                    event.set_target_end_time(time)
+                    event.set_current_color(current_color)
+                except (ValueError, KeyError):
+                    pass
+        elif event_type == EventType.UNIT_MOVE:
+            from core.events import EventUnitMove
+            if isinstance(event, EventUnitMove) and len(parts) >= 4:
+                try:
+                    c1 = int(parts[0])
+                    c2 = int(parts[1])
+                    c3 = int(parts[2])
+                    c4 = int(parts[3])
+                    hex1 = game_state.get_hex(c1, c2)
+                    hex2 = game_state.get_hex(c3, c4)
+                    if hex1 and hex2:
+                        event.set_hex1(hex1)
+                        event.set_hex2(hex2)
+                except (ValueError, KeyError):
+                    pass
+        elif event_type == EventType.PIECE_ADD:
+            from core.events import EventPieceAdd
+            if isinstance(event, EventPieceAdd) and len(parts) >= 3:
+                try:
+                    c1 = int(parts[0])
+                    c2 = int(parts[1])
+                    from core.enums import PieceType
+                    piece_type = PieceType(parts[2])
+                    unit_id = int(parts[3]) if len(parts) > 3 else -1
+                    hex = game_state.get_hex(c1, c2)
+                    if hex:
+                        event.set_hex(hex)
+                        event.set_piece_type(piece_type)
+                        if unit_id != -1:
+                            event.set_unit_id(unit_id)
+                except (ValueError, KeyError):
+                    pass
+        elif event_type == EventType.PIECE_DELETE:
+            from core.events import EventPieceDelete
+            if isinstance(event, EventPieceDelete) and len(parts) >= 2:
+                try:
+                    c1 = int(parts[0])
+                    c2 = int(parts[1])
+                    hex = game_state.get_hex(c1, c2)
+                    if hex:
+                        event.set_hex(hex)
+                except (ValueError, KeyError):
+                    pass
+        elif event_type == EventType.HEX_CHANGE_COLOR:
+            from core.events import EventHexChangeColor
+            if isinstance(event, EventHexChangeColor) and len(parts) >= 3:
+                try:
+                    c1 = int(parts[0])
+                    c2 = int(parts[1])
+                    color = HColor(parts[2])
+                    hex = game_state.get_hex(c1, c2)
+                    if hex:
+                        event.set_hex(hex)
+                        event.set_target_color(color)
+                except (ValueError, KeyError):
+                    pass
+        elif event_type == EventType.SET_MONEY:
+            from core.events import EventSetMoney
+            if isinstance(event, EventSetMoney) and len(parts) >= 3:
+                try:
+                    c1 = int(parts[0])
+                    c2 = int(parts[1])
+                    money = int(parts[2])
+                    hex = game_state.get_hex(c1, c2)
+                    if hex:
+                        event.set_hex(hex)
+                        event.set_target_money(money)
+                except (ValueError, KeyError):
+                    pass
+        elif event_type == EventType.PIECE_BUILD:
+            from core.events import EventPieceBuild
+            if isinstance(event, EventPieceBuild) and len(parts) >= 3:
+                try:
+                    c1 = int(parts[0])
+                    c2 = int(parts[1])
+                    from core.enums import PieceType
+                    piece_type = PieceType(parts[2])
+                    hex = game_state.get_hex(c1, c2)
+                    if hex:
+                        event.set_hex(hex)
+                        event.set_piece_type(piece_type)
+                except (ValueError, KeyError):
+                    pass
+        # Add more event types as needed
     
     def _decode_campaign_level_index(self, level_code: str) -> int:
         """Decode campaign level index."""

@@ -240,6 +240,258 @@ def test_multiple_save_load_cycles():
     assert loaded_hex3.piece == PieceType.PEASANT, "Second unit should exist"
 
 
+def test_save_and_load_preserves_history():
+    """Test that saving and loading preserves history events."""
+    original_state = create_test_game_state()
+    
+    # Build a unit to create history
+    red_province = None
+    for province in original_state.provinces_manager.provinces:
+        if province.get_color() == HColor.RED:
+            red_province = province
+            break
+    
+    assert red_province is not None, "Should have a red province"
+    
+    hex2 = original_state.get_hex(1, 0)
+    executor = CommandExecutor(original_state)
+    validator = CommandValidator(original_state)
+    
+    build_cmd = BuildPieceCommand(
+        hex=hex2,
+        piece_type=PieceType.PEASANT,
+        province_id=red_province.get_id()
+    )
+    
+    is_valid, error = validator.validate(build_cmd, HColor.RED)
+    assert is_valid, f"Build should be valid: {error}"
+    
+    success, error = executor.execute(build_cmd, HColor.RED)
+    assert success, f"Build should succeed: {error}"
+    
+    # Verify history was created
+    history_manager = original_state.history_manager
+    assert history_manager is not None, "History manager should exist"
+    assert len(history_manager.current_turn_events) > 0, "Should have current turn events"
+    
+    # Save the game state
+    encoder = GameStateEncoder()
+    level_code = encoder.encode(original_state)
+    
+    assert level_code is not None, "Level code should not be None"
+    assert "#events_list:" in level_code, "Level code should contain events_list section"
+    
+    # Load the game state
+    decoder = GameStateDecoder()
+    loaded_state, _ = decoder.decode(level_code)
+    
+    assert loaded_state is not None, "Loaded state should not be None"
+    assert hasattr(loaded_state, 'history_manager'), "Loaded state should have history_manager"
+    assert loaded_state.history_manager is not None, "History manager should not be None"
+    
+    # Verify history was loaded
+    loaded_history = loaded_state.history_manager
+    assert len(loaded_history.events_list) > 0, "Should have events in history after load"
+    
+    # Verify the build event is in history
+    build_events = [he for he in loaded_history.events_list 
+                    if he.event.get_type().value == "piece_build"]
+    assert len(build_events) > 0, "Should have a build event in loaded history"
+
+
+def test_save_and_load_preserves_history_with_author_info():
+    """Test that saving and loading preserves history with author information."""
+    original_state = create_test_game_state()
+    
+    # Set player name
+    red_player = None
+    for entity in original_state.entities_manager.entities:
+        if entity.color == HColor.RED:
+            red_player = entity
+            red_player.set_name("TestRedPlayer")
+            break
+    
+    assert red_player is not None, "Should have a red player"
+    
+    # Build a unit to create history
+    red_province = None
+    for province in original_state.provinces_manager.provinces:
+        if province.get_color() == HColor.RED:
+            red_province = province
+            break
+    
+    hex2 = original_state.get_hex(1, 0)
+    executor = CommandExecutor(original_state)
+    validator = CommandValidator(original_state)
+    
+    build_cmd = BuildPieceCommand(
+        hex=hex2,
+        piece_type=PieceType.PEASANT,
+        province_id=red_province.get_id()
+    )
+    
+    is_valid, error = validator.validate(build_cmd, HColor.RED)
+    assert is_valid, f"Build should be valid: {error}"
+    
+    success, error = executor.execute(build_cmd, HColor.RED)
+    assert success, f"Build should succeed: {error}"
+    
+    # Verify history has author info
+    history_manager = original_state.history_manager
+    build_events = [he for he in history_manager.current_turn_events 
+                    if he.event.get_type().value == "piece_build"]
+    assert len(build_events) > 0, "Should have a build event"
+    assert build_events[0].author_color == HColor.RED, "Author color should be RED"
+    assert build_events[0].author_name == "TestRedPlayer", "Author name should be preserved"
+    
+    # Save and load
+    encoder = GameStateEncoder()
+    level_code = encoder.encode(original_state)
+    
+    decoder = GameStateDecoder()
+    loaded_state, _ = decoder.decode(level_code)
+    
+    # Verify author info is preserved
+    loaded_history = loaded_state.history_manager
+    loaded_build_events = [he for he in loaded_history.events_list 
+                          if he.event.get_type().value == "piece_build"]
+    assert len(loaded_build_events) > 0, "Should have a build event in loaded history"
+    assert loaded_build_events[0].author_color == HColor.RED, "Author color should be preserved"
+    assert loaded_build_events[0].author_name == "TestRedPlayer", "Author name should be preserved"
+
+
+def test_save_and_load_preserves_multiple_history_events():
+    """Test that saving and loading preserves multiple history events."""
+    original_state = create_test_game_state()
+    
+    red_province = None
+    for province in original_state.provinces_manager.provinces:
+        if province.get_color() == HColor.RED:
+            red_province = province
+            break
+    
+    executor = CommandExecutor(original_state)
+    validator = CommandValidator(original_state)
+    
+    # Build first unit
+    hex2 = original_state.get_hex(1, 0)
+    build_cmd1 = BuildPieceCommand(
+        hex=hex2,
+        piece_type=PieceType.PEASANT,
+        province_id=red_province.get_id()
+    )
+    
+    is_valid, error = validator.validate(build_cmd1, HColor.RED)
+    assert is_valid, f"Build should be valid: {error}"
+    success, error = executor.execute(build_cmd1, HColor.RED)
+    assert success, f"Build should succeed: {error}"
+    
+    # Build second unit
+    hex3 = original_state.get_hex(2, 0)
+    build_cmd2 = BuildPieceCommand(
+        hex=hex3,
+        piece_type=PieceType.PEASANT,
+        province_id=red_province.get_id()
+    )
+    
+    is_valid, error = validator.validate(build_cmd2, HColor.RED)
+    assert is_valid, f"Build should be valid: {error}"
+    success, error = executor.execute(build_cmd2, HColor.RED)
+    assert success, f"Build should succeed: {error}"
+    
+    # Verify we have multiple events
+    history_manager = original_state.history_manager
+    build_events = [he for he in history_manager.current_turn_events 
+                    if he.event.get_type().value == "piece_build"]
+    assert len(build_events) >= 2, "Should have at least 2 build events"
+    
+    # Save and load
+    encoder = GameStateEncoder()
+    level_code = encoder.encode(original_state)
+    
+    decoder = GameStateDecoder()
+    loaded_state, _ = decoder.decode(level_code)
+    
+    # Verify multiple events are preserved
+    loaded_history = loaded_state.history_manager
+    loaded_build_events = [he for he in loaded_history.events_list 
+                          if he.event.get_type().value == "piece_build"]
+    assert len(loaded_build_events) >= 2, "Should have at least 2 build events in loaded history"
+
+
+def test_save_and_load_preserves_history_across_turns():
+    """Test that saving and loading preserves history across multiple turns."""
+    original_state = create_test_game_state()
+    
+    red_province = None
+    for province in original_state.provinces_manager.provinces:
+        if province.get_color() == HColor.RED:
+            red_province = province
+            break
+    
+    executor = CommandExecutor(original_state)
+    validator = CommandValidator(original_state)
+    
+    # Build a unit
+    hex2 = original_state.get_hex(1, 0)
+    build_cmd = BuildPieceCommand(
+        hex=hex2,
+        piece_type=PieceType.PEASANT,
+        province_id=red_province.get_id()
+    )
+    
+    is_valid, error = validator.validate(build_cmd, HColor.RED)
+    assert is_valid, f"Build should be valid: {error}"
+    success, error = executor.execute(build_cmd, HColor.RED)
+    assert success, f"Build should succeed: {error}"
+    
+    # End turn to move events to events_list
+    from commands.types import EndTurnCommand
+    end_turn_cmd = EndTurnCommand()
+    is_valid, error = validator.validate(end_turn_cmd, HColor.RED)
+    if is_valid:
+        executor.execute(end_turn_cmd, HColor.RED)
+    
+    # Verify events moved to events_list
+    history_manager = original_state.history_manager
+    assert len(history_manager.events_list) > 0, "Should have events in events_list after turn end"
+    assert len(history_manager.current_turn_events) == 0, "Current turn events should be empty after turn end"
+    
+    # Save and load
+    encoder = GameStateEncoder()
+    level_code = encoder.encode(original_state)
+    
+    decoder = GameStateDecoder()
+    loaded_state, _ = decoder.decode(level_code)
+    
+    # Verify history is preserved
+    loaded_history = loaded_state.history_manager
+    assert len(loaded_history.events_list) > 0, "Should have events in events_list after load"
+    assert len(loaded_history.events_list) == len(history_manager.events_list), "Event count should match"
+
+
+def test_save_and_load_empty_history():
+    """Test that saving and loading works correctly with empty history."""
+    original_state = create_test_game_state()
+    
+    # Don't perform any actions - history should be empty
+    history_manager = original_state.history_manager
+    assert len(history_manager.events_list) == 0, "Events list should be empty"
+    assert len(history_manager.current_turn_events) == 0, "Current turn events should be empty"
+    
+    # Save and load
+    encoder = GameStateEncoder()
+    level_code = encoder.encode(original_state)
+    
+    decoder = GameStateDecoder()
+    loaded_state, _ = decoder.decode(level_code)
+    
+    # Verify empty history is handled correctly
+    loaded_history = loaded_state.history_manager
+    assert loaded_history is not None, "History manager should exist"
+    # Empty history is acceptable - just verify it doesn't crash
+
+
 if __name__ == "__main__":
     test_save_and_load_game_state()
     print("✓ test_save_and_load_game_state passed")
@@ -252,5 +504,20 @@ if __name__ == "__main__":
     
     test_multiple_save_load_cycles()
     print("✓ test_multiple_save_load_cycles passed")
+    
+    test_save_and_load_preserves_history()
+    print("✓ test_save_and_load_preserves_history passed")
+    
+    test_save_and_load_preserves_history_with_author_info()
+    print("✓ test_save_and_load_preserves_history_with_author_info passed")
+    
+    test_save_and_load_preserves_multiple_history_events()
+    print("✓ test_save_and_load_preserves_multiple_history_events passed")
+    
+    test_save_and_load_preserves_history_across_turns()
+    print("✓ test_save_and_load_preserves_history_across_turns passed")
+    
+    test_save_and_load_empty_history()
+    print("✓ test_save_and_load_empty_history passed")
     
     print("\nAll tests passed!")

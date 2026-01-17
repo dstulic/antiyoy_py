@@ -53,6 +53,10 @@ class GameState(IEventListener):
         from core.tree_manager import TreeManager
         self.tree_manager = TreeManager(self)
         
+        # History manager - tracks game event history
+        from core.history_manager import HistoryManager
+        self.history_manager = HistoryManager(self)
+        
         # AI manager - handles AI player turns
         from ai.ai_manager import AIManager
         from core.enums import Difficulty

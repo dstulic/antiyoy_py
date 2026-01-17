@@ -118,17 +118,21 @@ class GameStateEncoder:
         else:
             builder.append("false")
         
-        # Starting hexes (history - placeholder)
+        # Starting hexes (history - placeholder for now)
         # builder.append(start_section(SECTION_STARTING_HEXES))
-        # builder.append("")  # Would need history manager
+        # builder.append("")  # Would need starting position snapshot
         
-        # Events list (history - placeholder)
-        # builder.append(start_section(SECTION_EVENTS_LIST))
-        # builder.append("")  # Would need history manager
+        # Events list (history)
+        if hasattr(game_state, 'history_manager') and game_state.history_manager:
+            builder.append(start_section(SECTION_EVENTS_LIST))
+            builder.append(game_state.history_manager.encode_events_list())
+        else:
+            builder.append(start_section(SECTION_EVENTS_LIST))
+            builder.append("")  # Empty if no history manager
         
-        # Starting provinces (history - placeholder)
+        # Starting provinces (history - placeholder for now)
         # builder.append(start_section(SECTION_STARTING_PROVINCES))
-        # builder.append("")  # Would need history manager
+        # builder.append("")  # Would need starting position snapshot
         
         # Editor (placeholder)
         # builder.append(start_section(SECTION_EDITOR))

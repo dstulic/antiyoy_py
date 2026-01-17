@@ -173,6 +173,10 @@ def api_game_init(level_index):
         if game_state.fog_of_war_manager and game_state.fog_of_war_manager.enabled:
             game_state.fog_of_war_manager.apply_update()
         
+        # Process AI turns to get to first human player's turn
+        if game_state.ai_manager:
+            game_state.ai_manager.process_ai_turns()
+        
         # Create game manager
         game_manager = GameManager(game_state, GameMode.CAMPAIGN)
         
@@ -235,6 +239,10 @@ def api_game_state():
     # Check if game_state has hexes attribute
     if not hasattr(game_state, 'hexes'):
         return jsonify({'error': 'Invalid game state structure'}), 500
+    
+    # Process AI turns to get to next human player's turn
+    if game_state.ai_manager:
+        game_state.ai_manager.process_ai_turns()
     
     # Get current player color for fog of war
     current_player_color = None
@@ -302,6 +310,19 @@ def api_game_state():
     hex_stats = game_state.get_hex_ownership_stats(current_player_color)
     owned_hex_percentage = hex_stats['percentage']
     
+    # Get event history
+    event_history = []
+    if hasattr(game_state, 'history_manager') and game_state.history_manager:
+        all_events = game_state.history_manager.get_all_events()
+        for history_event in all_events:
+            event_data = {
+                'type': history_event.event.get_type().value,
+                'encoding': history_event.event.encode(),
+                'author_color': history_event.author_color.value if history_event.author_color else None,
+                'author_name': history_event.author_name
+            }
+            event_history.append(event_data)
+    
     return jsonify({
         'success': True,
         'hexes': hexes,
@@ -309,7 +330,9 @@ def api_game_state():
         'current_color': current_color_value,
         'turn_index': game_state.turns_manager.turn_index if game_state.turns_manager else 0,
         'lap': game_state.turns_manager.lap if game_state.turns_manager else 0,
-        'owned_hex_percentage': round(owned_hex_percentage, 1)
+        'owned_hex_percentage': round(owned_hex_percentage, 1),
+        'event_history': event_history,
+        'event_history_encoded': game_state.history_manager.encode_events_list() if hasattr(game_state, 'history_manager') and game_state.history_manager else ""
     })
 
 
@@ -1172,6 +1195,7 @@ def api_game_end_turn():
     
     command = EndTurnCommand()
     executor = CommandExecutor(game_state)
+    
     success, error = executor.execute(command, current_entity.color)
     
     if success:
@@ -1179,7 +1203,11 @@ def api_game_end_turn():
         if game_state.fog_of_war_manager and game_state.fog_of_war_manager.enabled:
             game_state.fog_of_war_manager.apply_update()
         
-        # Get new current player after turn switch
+        # After ending turn, process AI turns until next human player's turn
+        if game_state.ai_manager:
+            game_state.ai_manager.process_ai_turns()
+        
+        # Get new current player after turn switch (and AI processing)
         new_current_entity = game_state.entities_manager.get_current_entity()
         new_current_color = new_current_entity.color.value if new_current_entity else None
         
