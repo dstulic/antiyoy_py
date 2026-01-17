@@ -148,12 +148,12 @@ class AbstractAI(ABC):
         if not self.difficulty:
             return True
         difficulty_order = [
-            self.game_state.enums.Difficulty.TUTORIAL,
-            self.game_state.enums.Difficulty.EASY,
-            self.game_state.enums.Difficulty.AVERAGE,
-            self.game_state.enums.Difficulty.HARD,
-            self.game_state.enums.Difficulty.EXPERT,
-            self.game_state.enums.Difficulty.BALANCER,
+            Difficulty.TUTORIAL,
+            Difficulty.EASY,
+            Difficulty.AVERAGE,
+            Difficulty.HARD,
+            Difficulty.EXPERT,
+            Difficulty.BALANCER,
         ]
         # This is a simplified check - in practice, difficulty comparison is more complex
         return False  # Default to allowing all features

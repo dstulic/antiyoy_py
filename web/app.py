@@ -199,11 +199,18 @@ def api_game_init(level_index):
                 session['session_id'] = session_id
         
         # Store session data with timestamp
+        # Track the event count after initial AI processing (this is the "last player turn" marker)
+        # For initial load, we want to send all events since game start (index 0)
+        last_player_turn_event_count = 0
+        if hasattr(game_state, 'history_manager') and game_state.history_manager:
+            last_player_turn_event_count = game_state.history_manager.get_total_event_count()
+        
         game_sessions[session_id] = {
             'game_state': game_state,
             'game_manager': game_manager,
             'level_index': level_index,
-            'created_at': time.time()
+            'created_at': time.time(),
+            'last_player_turn_event_count': last_player_turn_event_count
         }
         
         # Move to end to mark as most recently used
@@ -310,11 +317,14 @@ def api_game_state():
     hex_stats = game_state.get_hex_ownership_stats(current_player_color)
     owned_hex_percentage = hex_stats['percentage']
     
-    # Get event history
+    # Get event history since last player turn
     event_history = []
+    last_player_turn_event_count = session_data.get('last_player_turn_event_count', 0)
+    
     if hasattr(game_state, 'history_manager') and game_state.history_manager:
-        all_events = game_state.history_manager.get_all_events()
-        for history_event in all_events:
+        # Get events since last player turn
+        events_since_last_turn = game_state.history_manager.get_events_since_index(last_player_turn_event_count)
+        for history_event in events_since_last_turn:
             event_data = {
                 'type': history_event.event.get_type().value,
                 'encoding': history_event.event.encode(),
@@ -322,6 +332,10 @@ def api_game_state():
                 'author_name': history_event.author_name
             }
             event_history.append(event_data)
+        
+        # Update the last player turn event count for next request
+        # (after AI processing, we're now at the human player's turn)
+        session_data['last_player_turn_event_count'] = game_state.history_manager.get_total_event_count()
     
     return jsonify({
         'success': True,
@@ -901,13 +915,23 @@ def api_game_load():
         from core.game_manager import GameManager, GameMode
         game_manager = GameManager(game_state, GameMode.CAMPAIGN)
         
+        # Process AI turns to get to first human player's turn
+        if game_state.ai_manager:
+            game_state.ai_manager.process_ai_turns()
+        
+        # Track the event count after initial AI processing
+        last_player_turn_event_count = 0
+        if hasattr(game_state, 'history_manager') and game_state.history_manager:
+            last_player_turn_event_count = game_state.history_manager.get_total_event_count()
+        
         # Store session
         cleanup_oldest_session()
         game_sessions[new_session_id] = {
             'game_state': game_state,
             'game_manager': game_manager,
             'level_index': campaign_level_index if campaign_level_index >= 0 else 0,
-            'created_at': time.time()
+            'created_at': time.time(),
+            'last_player_turn_event_count': last_player_turn_event_count
         }
         
         # Set session ID
@@ -1203,9 +1227,19 @@ def api_game_end_turn():
         if game_state.fog_of_war_manager and game_state.fog_of_war_manager.enabled:
             game_state.fog_of_war_manager.apply_update()
         
+        # Track event count before processing AI turns
+        # This marks where the player's turn ended
+        last_player_turn_event_count = 0
+        if hasattr(game_state, 'history_manager') and game_state.history_manager:
+            last_player_turn_event_count = game_state.history_manager.get_total_event_count()
+        
         # After ending turn, process AI turns until next human player's turn
         if game_state.ai_manager:
             game_state.ai_manager.process_ai_turns()
+        
+        # Update session with new last player turn event count
+        # The next /api/game/state call will return events since this point
+        session_data['last_player_turn_event_count'] = last_player_turn_event_count
         
         # Get new current player after turn switch (and AI processing)
         new_current_entity = game_state.entities_manager.get_current_entity()

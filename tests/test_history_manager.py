@@ -231,6 +231,126 @@ def test_history_manager_encode_events_list():
     assert "," in encoded or len(history_manager.get_all_events()) == 1, "Should have comma separator or single event"
 
 
+def test_history_manager_get_events_since_index():
+    """Test that get_events_since_index returns correct events."""
+    game_state = create_test_game_state()
+    history_manager = game_state.history_manager
+    
+    events_factory = game_state.events_manager.factory
+    player = game_state.entities_manager.entities[0]
+    
+    # Create and apply first event, then end turn
+    event1 = events_factory.create_event(EventType.PIECE_BUILD)
+    if isinstance(event1, EventPieceBuild):
+        hex1 = game_state.get_hex(0, 0)
+        event1.set_hex(hex1)
+        event1.set_piece_type(PieceType.PEASANT)
+        event1.set_province_id(1)
+        event1.unit_id = 1
+        event1.set_author(player)
+        
+        if event1.is_valid():
+            event1.set_core_model(game_state)
+            game_state.events_manager.apply_event(event1)
+    
+    # End turn to move event1 to events_list
+    turn_end1 = events_factory.create_event(EventType.TURN_END)
+    if turn_end1:
+        turn_end1.set_core_model(game_state)
+        game_state.events_manager.apply_event(turn_end1)
+    
+    # Create and apply second event, then end turn
+    event2 = events_factory.create_event(EventType.PIECE_BUILD)
+    if isinstance(event2, EventPieceBuild):
+        hex1 = game_state.get_hex(0, 0)
+        event2.set_hex(hex1)
+        event2.set_piece_type(PieceType.SPEARMAN)
+        event2.set_province_id(1)
+        event2.unit_id = 2
+        event2.set_author(player)
+        
+        if event2.is_valid():
+            event2.set_core_model(game_state)
+            game_state.events_manager.apply_event(event2)
+    
+    # End turn to move event2 to events_list
+    turn_end2 = events_factory.create_event(EventType.TURN_END)
+    if turn_end2:
+        turn_end2.set_core_model(game_state)
+        game_state.events_manager.apply_event(turn_end2)
+    
+    # Create third event (in current turn, not yet in events_list)
+    event3 = events_factory.create_event(EventType.PIECE_BUILD)
+    if isinstance(event3, EventPieceBuild):
+        hex1 = game_state.get_hex(0, 0)
+        event3.set_hex(hex1)
+        event3.set_piece_type(PieceType.BARON)
+        event3.set_province_id(1)
+        event3.unit_id = 3
+        event3.set_author(player)
+        
+        if event3.is_valid():
+            event3.set_core_model(game_state)
+            game_state.events_manager.apply_event(event3)
+    
+    # Now we should have:
+    # events_list: [event1, event2]
+    # current_turn_events: [event3]
+    
+    # Test getting events from index 0 (should return all events)
+    events_from_0 = history_manager.get_events_since_index(0)
+    assert len(events_from_0) >= 3, "Should return all events from index 0"
+    assert len(events_from_0) == len(history_manager.events_list) + len(history_manager.current_turn_events), \
+        "Should return all events_list events plus current turn events"
+    
+    # Test getting events from index 1 (should return event2 and event3)
+    events_from_1 = history_manager.get_events_since_index(1)
+    assert len(events_from_1) >= 2, "Should return events from index 1 onwards"
+    # Should include event2 (from events_list[1:]) and event3 (from current_turn_events)
+    assert len(events_from_1) == (len(history_manager.events_list) - 1) + len(history_manager.current_turn_events), \
+        "Should return events_list[1:] plus current turn events"
+    
+    # Test getting events from index equal to events_list length (should return only current turn events)
+    events_list_length = len(history_manager.events_list)
+    events_from_end = history_manager.get_events_since_index(events_list_length)
+    assert len(events_from_end) == len(history_manager.current_turn_events), \
+        "Should return only current turn events when index equals events_list length"
+    
+    # Test getting events from index beyond events_list length (should return only current turn events)
+    events_from_beyond = history_manager.get_events_since_index(events_list_length + 10)
+    assert len(events_from_beyond) == len(history_manager.current_turn_events), \
+        "Should return only current turn events when index is beyond events_list length"
+    
+    # Test getting events from negative index (should treat as 0)
+    events_from_negative = history_manager.get_events_since_index(-1)
+    assert len(events_from_negative) == len(history_manager.events_list) + len(history_manager.current_turn_events), \
+        "Should return all events when index is negative"
+    
+    # Test that returned events list is a copy (independent list)
+    events_copy = history_manager.get_events_since_index(0)
+    original_events_list_length = len(history_manager.events_list)
+    original_current_turn_length = len(history_manager.current_turn_events)
+    original_copy_length = len(events_copy)
+    
+    # Verify the copy has the expected length
+    assert original_copy_length == original_events_list_length + original_current_turn_length, \
+        f"Copy should have {original_events_list_length + original_current_turn_length} events, got {original_copy_length}"
+    
+    # Modify the history manager (simulate turn end)
+    if len(history_manager.current_turn_events) > 0:
+        history_manager.events_list.extend(history_manager.current_turn_events)
+        history_manager.current_turn_events.clear()
+    
+    # The copy should still have the original length (it's an independent list)
+    assert len(events_copy) == original_copy_length, \
+        f"Copy length should remain {original_copy_length} after modifying history manager, got {len(events_copy)}"
+    
+    # Verify get_total_event_count works correctly
+    total_count = history_manager.get_total_event_count()
+    assert total_count == len(history_manager.events_list), \
+        f"get_total_event_count should return {len(history_manager.events_list)}, got {total_count}"
+
+
 if __name__ == "__main__":
     test_history_manager_initialization()
     print("✓ test_history_manager_initialization passed")
@@ -249,5 +369,8 @@ if __name__ == "__main__":
     
     test_history_manager_encode_events_list()
     print("✓ test_history_manager_encode_events_list passed")
+    
+    test_history_manager_get_events_since_index()
+    print("✓ test_history_manager_get_events_since_index passed")
     
     print("\nAll tests passed!")

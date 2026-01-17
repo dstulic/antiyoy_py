@@ -150,3 +150,30 @@ class HistoryManager(IEventListener):
     def get_all_events(self) -> List[HistoryEvent]:
         """Get all events (completed turns + current turn)."""
         return self.events_list + self.current_turn_events
+    
+    def get_events_since_index(self, start_index: int) -> List[HistoryEvent]:
+        """
+        Get events since a specific index in the events_list.
+        
+        Args:
+            start_index: The index in events_list to start from (0 = from beginning)
+            
+        Returns:
+            List of events since the specified index (includes current turn events)
+        """
+        if start_index < 0:
+            start_index = 0
+        if start_index >= len(self.events_list):
+            # If start_index is beyond events_list, only return current turn events
+            return self.current_turn_events.copy()
+        # Return events from start_index onwards + current turn events
+        return self.events_list[start_index:] + self.current_turn_events.copy()
+    
+    def get_total_event_count(self) -> int:
+        """
+        Get total number of events (completed turns only, not including current turn).
+        
+        Returns:
+            Number of events in events_list
+        """
+        return len(self.events_list)
