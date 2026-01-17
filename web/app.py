@@ -583,39 +583,69 @@ def api_game_valid_placement():
     valid_hexes = []
     
     if is_unit(piece_type):
-        # For units: hexes adjacent to province hexes (within move range)
-        # Simplified: get all hexes adjacent to any province hex
+        # For units: use MoveZoneManager to find hexes up to 4 hexes away from any province hex
+        # This matches the movement logic - units can be placed anywhere they could move to
         province_hexes = province.get_hexes()
         strength = get_strength(piece_type)
         
-        # Get all hexes within reach (adjacent to province)
-        visited_coords = set()
+        # Ensure adjacency is built
+        if not province_hexes[0].adjacent_hexes:
+            from save_load.decoder import _build_adjacency_graph
+            _build_adjacency_graph(game_state)
+        
+        # Collect valid hexes from all province hexes using MoveZoneManager
+        # For each province hex, calculate the move zone (up to 4 hexes away)
+        valid_hex_coords = set()
+        
         for p_hex in province_hexes:
-            for adj_hex in p_hex.adjacent_hexes:
-                coord_key = (adj_hex.coordinate1, adj_hex.coordinate2)
-                if coord_key in visited_coords:
+            # Use MoveZoneManager to calculate valid hexes from this province hex
+            # This will find all hexes within 4 hexes that can be reached
+            game_state.move_zone_manager.update(p_hex, limit=4, strength=strength)
+            
+            # Collect all hexes from the move zone
+            for move_hex in game_state.move_zone_manager.hexes:
+                # Skip the province hex itself (we're building from the province, not on it)
+                if move_hex == p_hex:
                     continue
-                visited_coords.add(coord_key)
                 
-                # Check if hex can accept unit
-                # Units can be placed on: empty hexes, trees, graves
-                # Cannot be placed on: static pieces (unless tree/grave)
-                if adj_hex.is_empty():
-                    valid_hexes.append({
-                        'coordinate1': adj_hex.coordinate1,
-                        'coordinate2': adj_hex.coordinate2
-                    })
-                elif adj_hex.piece in (PieceType.PINE, PieceType.PALM, PieceType.GRAVE):
-                    valid_hexes.append({
-                        'coordinate1': adj_hex.coordinate1,
-                        'coordinate2': adj_hex.coordinate2
-                    })
-                elif adj_hex.has_unit() and adj_hex.color == province.get_color():
-                    # Can merge with existing unit (build on top of it)
-                    valid_hexes.append({
-                        'coordinate1': adj_hex.coordinate1,
-                        'coordinate2': adj_hex.coordinate2
-                    })
+                coord_key = (move_hex.coordinate1, move_hex.coordinate2)
+                if coord_key in valid_hex_coords:
+                    continue
+                
+                # Check if hex can accept unit (same logic as movement)
+                can_place = False
+                
+                if move_hex.is_empty():
+                    can_place = True
+                elif move_hex.piece in (PieceType.PINE, PieceType.PALM, PieceType.GRAVE):
+                    can_place = True
+                elif move_hex.has_unit():
+                    # Can place on enemy units (capture) or friendly units in same province (merge)
+                    if move_hex.color != province.get_color():
+                        # Enemy unit - can capture if strength allows
+                        # MoveZoneManager already checked can_hex_be_captured, so if it's in the zone, it's valid
+                        can_place = True
+                    else:
+                        # Friendly unit - can merge if in same province
+                        move_hex_province = move_hex.get_province()
+                        if move_hex_province == province:
+                            from core.core_utils import get_merge_result
+                            if get_merge_result(piece_type, move_hex.piece) is not None:
+                                can_place = True
+                elif move_hex.has_static_piece() and move_hex.color != province.get_color():
+                    # Enemy city/tower - can capture if strength allows
+                    # MoveZoneManager already checked can_hex_be_captured, so if it's in the zone, it's valid
+                    can_place = True
+                
+                if can_place:
+                    valid_hex_coords.add(coord_key)
+        
+        # Convert to list format
+        for coord in valid_hex_coords:
+            valid_hexes.append({
+                'coordinate1': coord[0],
+                'coordinate2': coord[1]
+            })
     elif piece_type == PieceType.FARM:
         # For farms: empty hexes within the province that are adjacent to a city or farm
         # This matches MoveZoneManager.updateForFarm() logic
@@ -1081,6 +1111,18 @@ def api_game_valid_movement():
         # Skip the start hex itself
         if move_hex == hex:
             continue
+        
+        # Safety check: Calculate actual hex distance and verify it's within limit
+        # This is a double-check to ensure we never return hexes beyond 4 hexes
+        dq = move_hex.coordinate1 - hex.coordinate1
+        dr = move_hex.coordinate2 - hex.coordinate2
+        hex_distance = (abs(dq) + abs(dq + dr) + abs(dr)) // 2
+        if hex_distance > 4:
+            # This should never happen if MoveZoneManager is working correctly
+            print(f"WARNING: MoveZoneManager returned hex at distance {hex_distance} (should be <= 4)")
+            print(f"  Start: ({hex.coordinate1}, {hex.coordinate2}), Target: ({move_hex.coordinate1}, {move_hex.coordinate2})")
+            print(f"  Counter: {getattr(move_hex, 'counter', 'N/A')}")
+            continue  # Skip this hex
         
         # Can move to empty hexes, trees, graves
         can_move = False

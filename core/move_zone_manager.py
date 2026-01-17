@@ -33,13 +33,17 @@ class MoveZoneManager:
             if self._start_hex is None:
                 return False
             
+            # For the start hex (parent_hex is None), always allow it
+            if parent_hex is None:
+                return True
+            
             # Parent hex must have same color as start hex
-            if parent_hex is not None:
-                if parent_hex.color != self._start_hex.color:
-                    return False
-                # Parent hex's counter must be > 0
-                if not hasattr(parent_hex, 'counter') or parent_hex.counter == 0:
-                    return False
+            if parent_hex.color != self._start_hex.color:
+                return False
+            
+            # Parent hex's counter must be > 0 (movement remaining)
+            if not hasattr(parent_hex, 'counter') or parent_hex.counter <= 0:
+                return False
             
             # Check if hex can be captured (if different color)
             if hex.color != self._start_hex.color:
@@ -61,6 +65,9 @@ class MoveZoneManager:
             if parent_hex is not None:
                 # Set counter to parent's counter - 1
                 hex.counter = parent_hex.counter - 1
+                # Safety check: counter should never be negative
+                if hex.counter < 0:
+                    hex.counter = 0
             else:
                 # Start hex gets the limit
                 hex.counter = self._limit
@@ -90,9 +97,10 @@ class MoveZoneManager:
         if self._start_entity is None:
             return
         
-        # Reset flags for all hexes
+        # Reset flags and counters for all hexes (important: counters must be reset!)
         for hex in self.game_state.hexes:
             hex.flag = False
+            hex.counter = 0  # Reset counter to prevent propagation beyond limit
         
         # Apply wave worker
         if self._wave_worker:

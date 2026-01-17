@@ -166,28 +166,43 @@ class CommandValidator:
         
         # Check if hex is empty (for static pieces) or can accept unit
         if is_unit(command.piece_type):
-            # For units: validate that hex is adjacent to province (allows building on gray hexes)
+            # For units: use MoveZoneManager to check if hex is reachable (up to 4 hexes away)
+            # This matches the Java implementation: updateMoveZoneForUnitConstruction + contains check
+            from core.core_utils import get_strength
+            strength = get_strength(command.piece_type)
             province_hexes = province.get_hexes()
-            is_adjacent = False
+            
+            # Ensure adjacency is built
+            if not province_hexes[0].adjacent_hexes:
+                from save_load.decoder import _build_adjacency_graph
+                _build_adjacency_graph(self.game_state)
+            
+            # Check if hex is reachable from any province hex using MoveZoneManager
+            hex_reachable = False
             for p_hex in province_hexes:
-                if command.hex in p_hex.adjacent_hexes:
-                    is_adjacent = True
+                self.game_state.move_zone_manager.update(p_hex, limit=4, strength=strength)
+                if self.game_state.move_zone_manager.contains(command.hex):
+                    hex_reachable = True
                     break
             
-            if not is_adjacent:
-                return False, "Unit can only be built on hexes adjacent to province"
+            if not hex_reachable:
+                return False, "Hex is not reachable for unit construction (outside movement range)"
             
-            # For units, check if hex is empty, has tree/grave, or has mergeable unit
+            # For units, check if hex can accept the unit
+            # MoveZoneManager already checked if enemy hexes can be captured, so if it's in the zone, it's valid
+            # But we still need to check some edge cases:
             if command.hex.has_piece():
                 if command.hex.piece not in (PieceType.PINE, PieceType.PALM, PieceType.GRAVE):
-                    # Check if it's a mergeable unit (same color)
+                    # Check if it's a mergeable unit (same color, same province)
                     if command.hex.has_unit() and command.hex.color == province.get_color():
                         # Check if merge result is valid
                         from core.core_utils import get_merge_result
                         if get_merge_result(command.piece_type, command.hex.piece) is None:
                             return False, "Cannot merge these units"
-                    else:
-                        return False, "Cannot build unit on this hex"
+                    # For enemy units or static pieces: MoveZoneManager already validated they can be captured
+                    # For friendly static pieces (city/tower): cannot build units on them (except trees/graves)
+                    elif command.hex.color == province.get_color() and command.hex.has_static_piece():
+                        return False, "Cannot build unit on friendly static piece (city/tower)"
         else:
             # For static pieces (towers, farms), hex must be empty
             # Exception: strong_tower can be built on tower
