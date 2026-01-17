@@ -21,6 +21,7 @@ class AbstractAI(ABC):
         self.random = random.Random()
         self.difficulty: Optional[Difficulty] = None
         self.diplomatic_ai = self.get_diplomatic_ai()
+        self.temp_list: List = []  # Temporary list for operations
 
     def perform(self) -> None:
         """

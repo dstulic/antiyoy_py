@@ -74,6 +74,10 @@ class GameState(IEventListener):
         from core.game_end_manager import GameEndManager
         self.game_end_manager = GameEndManager(self)
         
+        # Quick stats manager - efficiently tracks hex quantities
+        from core.quick_stats_manager import QuickStatsManager
+        self.quick_stats_manager = QuickStatsManager(self)
+        
         self.construction_manager = None
         self.city_manager = None
         self.diplomacy_manager = None
