@@ -53,6 +53,10 @@ class GameState(IEventListener):
         from core.tree_manager import TreeManager
         self.tree_manager = TreeManager(self)
         
+        # History manager - tracks game event history
+        from core.history_manager import HistoryManager
+        self.history_manager = HistoryManager(self)
+        
         # AI manager - handles AI player turns
         from ai.ai_manager import AIManager
         from core.enums import Difficulty
@@ -69,6 +73,10 @@ class GameState(IEventListener):
         # Game end manager - checks for game end conditions
         from core.game_end_manager import GameEndManager
         self.game_end_manager = GameEndManager(self)
+        
+        # Quick stats manager - efficiently tracks hex quantities
+        from core.quick_stats_manager import QuickStatsManager
+        self.quick_stats_manager = QuickStatsManager(self)
         
         self.construction_manager = None
         self.city_manager = None

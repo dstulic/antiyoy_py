@@ -21,6 +21,7 @@ class AbstractAI(ABC):
         self.random = random.Random()
         self.difficulty: Optional[Difficulty] = None
         self.diplomatic_ai = self.get_diplomatic_ai()
+        self.temp_list: List = []  # Temporary list for operations
 
     def perform(self) -> None:
         """
@@ -148,12 +149,12 @@ class AbstractAI(ABC):
         if not self.difficulty:
             return True
         difficulty_order = [
-            self.game_state.enums.Difficulty.TUTORIAL,
-            self.game_state.enums.Difficulty.EASY,
-            self.game_state.enums.Difficulty.AVERAGE,
-            self.game_state.enums.Difficulty.HARD,
-            self.game_state.enums.Difficulty.EXPERT,
-            self.game_state.enums.Difficulty.BALANCER,
+            Difficulty.TUTORIAL,
+            Difficulty.EASY,
+            Difficulty.AVERAGE,
+            Difficulty.HARD,
+            Difficulty.EXPERT,
+            Difficulty.BALANCER,
         ]
         # This is a simplified check - in practice, difficulty comparison is more complex
         return False  # Default to allowing all features

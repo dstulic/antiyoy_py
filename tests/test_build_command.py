@@ -35,6 +35,20 @@ class MockRuleset:
     def get_tree_reward(self) -> int:
         """Mock method for tree reward."""
         return 5
+    
+    def can_hex_be_captured(self, hex_obj, strength: int) -> bool:
+        """Mock method for checking if hex can be captured."""
+        # Simple logic: allow capture if hex has enemy unit or static piece
+        # In real game, this would check defense values
+        if hex_obj.has_unit():
+            # Can capture enemy units (simplified - always allow)
+            return True
+        if hex_obj.has_static_piece():
+            # Can capture cities/towers if strength >= defense
+            # Simplified: always allow for testing
+            return True
+        # Empty hexes or trees can be captured
+        return True
 
 
 class MockProvincesManager:
@@ -69,15 +83,29 @@ class MockEntitiesManager:
     
     def __init__(self, current_color: HColor):
         self.current_color = current_color
+        self._entities = {}
     
     def get_current_entity(self):
         from core.player_entity import PlayerEntity
         from core.enums import EntityType
         entity = PlayerEntity(None, EntityType.HUMAN, self.current_color)
+        # Cache the entity
+        self._entities[self.current_color] = entity
         return entity
     
     def get_current_color(self) -> HColor:
         return self.current_color
+    
+    def get_entity(self, color: HColor):
+        """Get entity by color."""
+        if color in self._entities:
+            return self._entities[color]
+        # Create entity if not cached
+        from core.player_entity import PlayerEntity
+        from core.enums import EntityType
+        entity = PlayerEntity(None, EntityType.HUMAN, color)
+        self._entities[color] = entity
+        return entity
 
 
 class MockEventsManager:
@@ -147,6 +175,50 @@ class MockReadinessManager:
             self.ready_hexes.remove(hex_obj)
 
 
+class MockMoveZoneManager:
+    """Mock move zone manager for testing."""
+    
+    def __init__(self, game_state):
+        self.game_state = game_state
+        self.hexes = []
+        self._limit = 4
+        self._strength = 0
+        self._start_hex = None
+        self._start_entity = None
+        # Store a real MoveZoneManager instance for actual calculations
+        from core.move_zone_manager import MoveZoneManager
+        self._real_manager = MoveZoneManager(game_state)
+    
+    def update(self, start_hex, limit, strength):
+        """Update movement zone using real MoveZoneManager."""
+        from save_load.decoder import _build_adjacency_graph
+        
+        self._limit = limit
+        self._strength = strength
+        self._start_hex = start_hex
+        
+        # Get start entity
+        if self.game_state.entities_manager:
+            self._start_entity = self.game_state.entities_manager.get_entity(start_hex.color)
+        
+        # Ensure adjacency is built
+        if not start_hex.adjacent_hexes:
+            _build_adjacency_graph(self.game_state)
+        
+        # Use the real MoveZoneManager for calculations
+        self._real_manager.update(start_hex, limit, strength)
+        self.hexes = self._real_manager.hexes
+    
+    def clear(self):
+        """Clear movement zone."""
+        self.hexes.clear()
+        self._real_manager.clear()
+    
+    def contains(self, hex_obj):
+        """Check if hex is in movement zone."""
+        return hex_obj in self.hexes
+
+
 def create_mock_game_state(hexes, provinces, current_color: HColor, ruleset=None):
     """Create a mock game state for testing."""
     game_state = GameState.__new__(GameState)
@@ -159,6 +231,10 @@ def create_mock_game_state(hexes, provinces, current_color: HColor, ruleset=None
     game_state.readiness_manager = MockReadinessManager()
     # Mock game_end_manager to prevent "Game has ended" errors in tests
     game_state.game_end_manager = MockGameEndManager()
+    # Mock diplomacy_manager (needed for MoveZoneManager)
+    game_state.diplomacy_manager = None
+    # Mock move_zone_manager (needed for unit placement validation)
+    game_state.move_zone_manager = MockMoveZoneManager(game_state)
     
     # Mock get_hex method
     def get_hex(c1, c2):
@@ -177,6 +253,10 @@ def create_mock_game_state(hexes, provinces, current_color: HColor, ruleset=None
         return result
     
     game_state.get_id_for_new_unit = get_id_for_new_unit
+    
+    # Ensure adjacency is built for hexes
+    from save_load.decoder import _build_adjacency_graph
+    _build_adjacency_graph(game_state)
     
     return game_state
 
@@ -307,8 +387,8 @@ class TestBuildCommandValidator:
         validator = CommandValidator(game_state)
         is_valid, error = validator.validate(command, HColor.RED)
         
-        assert not is_valid, "Command should be invalid (hex not adjacent)"
-        assert "adjacent" in error.lower()
+        assert not is_valid, "Command should be invalid (hex not reachable)"
+        assert "reachable" in error.lower() or "range" in error.lower()
     
     def test_validate_build_static_piece_on_owned_hex(self):
         """Test building a static piece on an owned hex."""
@@ -554,6 +634,393 @@ class TestBuildCommandExecutor:
         assert len(game_state.events_manager.applied_events) == 1
         assert hex1.piece == PieceType.STRONG_TOWER
         assert province.get_money() == 70  # 100 - 30
+
+
+class TestBuildUnitOnEnemyTerritory:
+    """Test building units on enemy territory (up to 4 hexes away)."""
+    
+    def test_build_unit_on_enemy_hex_within_4_hexes(self):
+        """Test that a unit can be built on an enemy hex within 4 hexes of province."""
+        from core.game_state import GameState
+        from core.enums import RulesType, EntityType
+        from save_load.decoder import _build_adjacency_graph
+        from core.player_entity import PlayerEntity
+        
+        game_state = GameState()
+        game_state.set_ruleset(RulesType.DEF, version_code=1)
+        
+        # Create red province with city
+        red_hex1 = game_state.add_hex(0, 0, HColor.RED)
+        red_hex1.piece = PieceType.CITY
+        
+        # Create chain of hexes: red -> empty -> empty -> empty -> enemy hex
+        # This tests that we can build up to 4 hexes away
+        hex2 = game_state.add_hex(1, 0, HColor.RED)
+        hex3 = game_state.add_hex(2, 0, HColor.RED)
+        hex4 = game_state.add_hex(3, 0, HColor.RED)
+        enemy_hex = game_state.add_hex(4, 0, HColor.BLUE)  # 4 hexes away
+        
+        _build_adjacency_graph(game_state)
+        
+        # Create player entities
+        red_player = PlayerEntity(game_state.entities_manager, EntityType.HUMAN, HColor.RED)
+        blue_player = PlayerEntity(game_state.entities_manager, EntityType.HUMAN, HColor.BLUE)
+        if game_state.entities_manager.entities is None:
+            game_state.entities_manager.entities = []
+        game_state.entities_manager.entities.append(red_player)
+        game_state.entities_manager.entities.append(blue_player)
+        
+        # Build provinces
+        game_state.provinces_manager.builder.grant_permission()
+        game_state.provinces_manager.builder.apply()
+        
+        # Get red province
+        red_province = None
+        for province in game_state.provinces_manager.provinces:
+            if province.get_color() == HColor.RED:
+                red_province = province
+                break
+        
+        assert red_province is not None, "Red province should exist"
+        red_province.set_money(200)
+        
+        # Add empty red hexes to the province (they should be connected to the city)
+        # This ensures they're considered part of the province for movement calculations
+        # Only add hexes that exist in this test
+        hexes_to_add = []
+        if 'hex2' in locals():
+            hexes_to_add.append(hex2)
+        if 'hex3' in locals():
+            hexes_to_add.append(hex3)
+        if 'hex4' in locals():
+            hexes_to_add.append(hex4)
+        if 'hex5' in locals():
+            hexes_to_add.append(hex5)
+        
+        for hex_obj in hexes_to_add:
+            if hex_obj not in red_province.get_hexes():
+                red_province.add_hex(hex_obj)
+        
+        # Create command to build unit on enemy hex
+        command = BuildPieceCommand(
+            hex=enemy_hex,
+            piece_type=PieceType.PEASANT,
+            province_id=red_province.get_id(),
+            province_hex=red_hex1
+        )
+        
+        # Validate
+        validator = CommandValidator(game_state)
+        is_valid, error = validator.validate(command, HColor.RED)
+        
+        assert is_valid, f"Command should be valid (enemy hex within 4 hexes): {error}"
+        
+        # Execute
+        executor = CommandExecutor(game_state)
+        success, error = executor.execute(command, HColor.RED)
+        
+        assert success, f"Command should succeed: {error}"
+        assert enemy_hex.piece == PieceType.PEASANT, "Enemy hex should have unit after build"
+        assert enemy_hex.color == HColor.RED, "Enemy hex should be colored red after capture"
+    
+    def test_build_unit_on_enemy_hex_beyond_4_hexes_fails(self):
+        """Test that a unit cannot be built on an enemy hex beyond 4 hexes away."""
+        from core.game_state import GameState
+        from core.enums import RulesType, EntityType
+        from save_load.decoder import _build_adjacency_graph
+        from core.player_entity import PlayerEntity
+        
+        game_state = GameState()
+        game_state.set_ruleset(RulesType.DEF, version_code=1)
+        
+        # Create red province with city
+        red_hex1 = game_state.add_hex(0, 0, HColor.RED)
+        red_hex1.piece = PieceType.CITY
+        
+        # Create chain: red -> empty -> empty -> empty -> empty -> enemy hex (5 hexes away)
+        # To test that hex5 is beyond the 4-hex limit, we need to ensure hex5 is NOT in the province
+        # Otherwise, the enemy hex would be reachable from hex5 (1 hex away)
+        # So we'll make hex5 gray (neutral) so it's not automatically added to the province
+        hex2 = game_state.add_hex(1, 0, HColor.RED)
+        hex3 = game_state.add_hex(2, 0, HColor.RED)
+        hex4 = game_state.add_hex(3, 0, HColor.RED)
+        hex5 = game_state.add_hex(4, 0, HColor.GRAY)  # Gray so it's not in the province
+        enemy_hex = game_state.add_hex(5, 0, HColor.BLUE)  # 5 hexes away (too far), adjacent to hex5
+        
+        _build_adjacency_graph(game_state)
+        
+        # Create player entities
+        red_player = PlayerEntity(game_state.entities_manager, EntityType.HUMAN, HColor.RED)
+        blue_player = PlayerEntity(game_state.entities_manager, EntityType.HUMAN, HColor.BLUE)
+        if game_state.entities_manager.entities is None:
+            game_state.entities_manager.entities = []
+        game_state.entities_manager.entities.append(red_player)
+        game_state.entities_manager.entities.append(blue_player)
+        
+        # Build provinces
+        game_state.provinces_manager.builder.grant_permission()
+        game_state.provinces_manager.builder.apply()
+        
+        # Get red province
+        red_province = None
+        for province in game_state.provinces_manager.provinces:
+            if province.get_color() == HColor.RED:
+                red_province = province
+                break
+        
+        assert red_province is not None, "Red province should exist"
+        red_province.set_money(200)
+        
+        # Verify that hex5 is NOT in the province (it's gray, so it shouldn't be)
+        # This ensures the enemy hex can only be reached through the red hexes,
+        # and since it's 5 hexes away from red_hex1, it should be beyond the 4-hex limit
+        assert hex5 not in red_province.get_hexes(), "hex5 should not be in the province (it's gray)"
+        
+        # Create command to build unit on enemy hex (too far)
+        command = BuildPieceCommand(
+            hex=enemy_hex,
+            piece_type=PieceType.PEASANT,
+            province_id=red_province.get_id(),
+            province_hex=red_hex1
+        )
+        
+        # Validate
+        validator = CommandValidator(game_state)
+        is_valid, error = validator.validate(command, HColor.RED)
+        
+        assert not is_valid, "Command should be invalid (enemy hex beyond 4 hexes)"
+        assert "reachable" in error.lower() or "range" in error.lower(), \
+            f"Error should mention reachability/range, got: {error}"
+    
+    def test_build_unit_on_enemy_hex_with_enemy_unit(self):
+        """Test that a unit can be built on an enemy hex with an enemy unit (capture)."""
+        from core.game_state import GameState
+        from core.enums import RulesType, EntityType
+        from save_load.decoder import _build_adjacency_graph
+        from core.player_entity import PlayerEntity
+        
+        game_state = GameState()
+        game_state.set_ruleset(RulesType.DEF, version_code=1)
+        
+        # Create red province with city
+        red_hex1 = game_state.add_hex(0, 0, HColor.RED)
+        red_hex1.piece = PieceType.CITY
+        
+        # Create enemy hex with enemy unit (2 hexes away)
+        # Enemy hex must be adjacent to the friendly hex chain
+        hex2 = game_state.add_hex(1, 0, HColor.RED)
+        enemy_hex = game_state.add_hex(2, 0, HColor.BLUE)  # Adjacent to hex2
+        enemy_hex.piece = PieceType.PEASANT  # Enemy unit
+        
+        _build_adjacency_graph(game_state)
+        
+        # Create player entities
+        red_player = PlayerEntity(game_state.entities_manager, EntityType.HUMAN, HColor.RED)
+        blue_player = PlayerEntity(game_state.entities_manager, EntityType.HUMAN, HColor.BLUE)
+        if game_state.entities_manager.entities is None:
+            game_state.entities_manager.entities = []
+        game_state.entities_manager.entities.append(red_player)
+        game_state.entities_manager.entities.append(blue_player)
+        
+        # Build provinces
+        game_state.provinces_manager.builder.grant_permission()
+        game_state.provinces_manager.builder.apply()
+        
+        # Get red province
+        red_province = None
+        for province in game_state.provinces_manager.provinces:
+            if province.get_color() == HColor.RED:
+                red_province = province
+                break
+        
+        assert red_province is not None, "Red province should exist"
+        red_province.set_money(200)
+        
+        # Ensure hex2 is in the province (it should be automatically added, but verify)
+        # The move zone needs to propagate through hex2 to reach the enemy hex
+        if hex2 not in red_province.get_hexes():
+            red_province.add_hex(hex2)
+        
+        # Create command to build spearman (strength 2) on enemy hex with enemy peasant (defense 1)
+        # Spearman can capture peasant (strength 2 > defense 1)
+        command = BuildPieceCommand(
+            hex=enemy_hex,
+            piece_type=PieceType.SPEARMAN,
+            province_id=red_province.get_id(),
+            province_hex=red_hex1
+        )
+        
+        # Validate
+        validator = CommandValidator(game_state)
+        is_valid, error = validator.validate(command, HColor.RED)
+        
+        assert is_valid, f"Command should be valid (spearman can capture peasant): {error}"
+        
+        # Execute
+        executor = CommandExecutor(game_state)
+        success, error = executor.execute(command, HColor.RED)
+        
+        assert success, f"Command should succeed: {error}"
+        # The enemy unit should be replaced by our unit
+        assert enemy_hex.piece == PieceType.SPEARMAN, "Enemy hex should have our spearman after build"
+        assert enemy_hex.color == HColor.RED, "Enemy hex should be colored red after capture"
+    
+    def test_build_unit_on_enemy_hex_with_city(self):
+        """Test that a unit can be built on an enemy hex with a city (if unit strength allows)."""
+        from core.game_state import GameState
+        from core.enums import RulesType, EntityType
+        from save_load.decoder import _build_adjacency_graph
+        from core.player_entity import PlayerEntity
+        
+        game_state = GameState()
+        game_state.set_ruleset(RulesType.DEF, version_code=1)
+        
+        # Create red province with city
+        red_hex1 = game_state.add_hex(0, 0, HColor.RED)
+        red_hex1.piece = PieceType.CITY
+        
+        # Create enemy hex with city (2 hexes away)
+        # Enemy hex must be adjacent to the friendly hex chain
+        hex2 = game_state.add_hex(1, 0, HColor.RED)
+        enemy_hex = game_state.add_hex(2, 0, HColor.BLUE)  # Adjacent to hex2
+        enemy_hex.piece = PieceType.CITY  # Enemy city (defense 1)
+        
+        _build_adjacency_graph(game_state)
+        
+        # Create player entities
+        red_player = PlayerEntity(game_state.entities_manager, EntityType.HUMAN, HColor.RED)
+        blue_player = PlayerEntity(game_state.entities_manager, EntityType.HUMAN, HColor.BLUE)
+        if game_state.entities_manager.entities is None:
+            game_state.entities_manager.entities = []
+        game_state.entities_manager.entities.append(red_player)
+        game_state.entities_manager.entities.append(blue_player)
+        
+        # Build provinces
+        game_state.provinces_manager.builder.grant_permission()
+        game_state.provinces_manager.builder.apply()
+        
+        # Get red province
+        red_province = None
+        for province in game_state.provinces_manager.provinces:
+            if province.get_color() == HColor.RED:
+                red_province = province
+                break
+        
+        assert red_province is not None, "Red province should exist"
+        red_province.set_money(200)
+        
+        # Ensure hex2 is in the province (it should be automatically added, but verify)
+        # The move zone needs to propagate through hex2 to reach the enemy hex
+        if hex2 not in red_province.get_hexes():
+            red_province.add_hex(hex2)
+        
+        # Create command to build spearman (strength 2) on enemy city (defense 1)
+        # Spearman can capture city (strength 2 > defense 1)
+        # Note: Peasant (strength 1) cannot capture city (defense 1) because 1 is not > 1
+        command = BuildPieceCommand(
+            hex=enemy_hex,
+            piece_type=PieceType.SPEARMAN,
+            province_id=red_province.get_id(),
+            province_hex=red_hex1
+        )
+        
+        # Validate
+        validator = CommandValidator(game_state)
+        is_valid, error = validator.validate(command, HColor.RED)
+        
+        assert is_valid, f"Command should be valid (spearman can capture city): {error}"
+        
+        # Execute
+        executor = CommandExecutor(game_state)
+        success, error = executor.execute(command, HColor.RED)
+        
+        assert success, f"Command should succeed: {error}"
+        # The city should be replaced by our unit
+        assert enemy_hex.piece == PieceType.SPEARMAN, "Enemy hex should have our spearman after build"
+        assert enemy_hex.color == HColor.RED, "Enemy hex should be colored red after capture"
+    
+    def test_build_unit_on_enemy_hex_3_hexes_away(self):
+        """Test that a unit can be built on an enemy hex exactly 3 hexes away."""
+        from core.game_state import GameState
+        from core.enums import RulesType, EntityType
+        from save_load.decoder import _build_adjacency_graph
+        from core.player_entity import PlayerEntity
+        
+        game_state = GameState()
+        game_state.set_ruleset(RulesType.DEF, version_code=1)
+        
+        # Create red province with city
+        red_hex1 = game_state.add_hex(0, 0, HColor.RED)
+        red_hex1.piece = PieceType.CITY
+        
+        # Create chain: red -> empty -> empty -> enemy hex (3 hexes away)
+        # Enemy hex must be adjacent to the last friendly hex in the chain
+        hex2 = game_state.add_hex(1, 0, HColor.RED)
+        hex3 = game_state.add_hex(2, 0, HColor.RED)
+        enemy_hex = game_state.add_hex(3, 0, HColor.BLUE)  # 3 hexes away, adjacent to hex3
+        
+        _build_adjacency_graph(game_state)
+        
+        # Create player entities
+        red_player = PlayerEntity(game_state.entities_manager, EntityType.HUMAN, HColor.RED)
+        blue_player = PlayerEntity(game_state.entities_manager, EntityType.HUMAN, HColor.BLUE)
+        if game_state.entities_manager.entities is None:
+            game_state.entities_manager.entities = []
+        game_state.entities_manager.entities.append(red_player)
+        game_state.entities_manager.entities.append(blue_player)
+        
+        # Build provinces
+        game_state.provinces_manager.builder.grant_permission()
+        game_state.provinces_manager.builder.apply()
+        
+        # Get red province
+        red_province = None
+        for province in game_state.provinces_manager.provinces:
+            if province.get_color() == HColor.RED:
+                red_province = province
+                break
+        
+        assert red_province is not None, "Red province should exist"
+        red_province.set_money(200)
+        
+        # Add empty red hexes to the province (they should be connected to the city)
+        # This ensures they're considered part of the province for movement calculations
+        # Only add hexes that exist in this test
+        hexes_to_add = []
+        if 'hex2' in locals():
+            hexes_to_add.append(hex2)
+        if 'hex3' in locals():
+            hexes_to_add.append(hex3)
+        if 'hex4' in locals():
+            hexes_to_add.append(hex4)
+        if 'hex5' in locals():
+            hexes_to_add.append(hex5)
+        
+        for hex_obj in hexes_to_add:
+            if hex_obj not in red_province.get_hexes():
+                red_province.add_hex(hex_obj)
+        
+        # Create command to build unit on enemy hex (3 hexes away)
+        command = BuildPieceCommand(
+            hex=enemy_hex,
+            piece_type=PieceType.PEASANT,
+            province_id=red_province.get_id(),
+            province_hex=red_hex1
+        )
+        
+        # Validate
+        validator = CommandValidator(game_state)
+        is_valid, error = validator.validate(command, HColor.RED)
+        
+        assert is_valid, f"Command should be valid (enemy hex 3 hexes away): {error}"
+        
+        # Execute
+        executor = CommandExecutor(game_state)
+        success, error = executor.execute(command, HColor.RED)
+        
+        assert success, f"Command should succeed: {error}"
+        assert enemy_hex.piece == PieceType.PEASANT, "Enemy hex should have unit after build"
+        assert enemy_hex.color == HColor.RED, "Enemy hex should be colored red after capture"
 
 
 if __name__ == "__main__":

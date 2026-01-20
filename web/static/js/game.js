@@ -388,11 +388,137 @@ function initializeGameBoard() {
     });
 }
 
+// Track if we're currently animating events (disable UI during animation)
+let isAnimatingEvents = false;
+
+function parseEventHistory(eventHistory) {
+    /**
+     * Parse event history from backend.
+     * Events are in format: {type, encoding, author_color, author_name}
+     * Encoding format: "<event_key> <data>|author:<color>:<name>"
+     * 
+     * Returns array of parsed events ready for animation.
+     */
+    if (!eventHistory || !Array.isArray(eventHistory)) {
+        return [];
+    }
+    
+    const parsedEvents = [];
+    
+    for (const eventData of eventHistory) {
+        const event = {
+            type: eventData.type,
+            encoding: eventData.encoding,
+            authorColor: eventData.author_color,
+            authorName: eventData.author_name
+        };
+        
+        // Parse the encoding to extract event details
+        // Format: "<event_key> <data>|author:<color>:<name>"
+        const encoding = eventData.encoding || '';
+        const parts = encoding.split('|author:');
+        const eventPart = parts[0] || '';
+        const eventParts = eventPart.trim().split(' ');
+        
+        if (eventParts.length > 0) {
+            event.key = eventParts[0];
+            event.data = eventParts.slice(1).join(' ');
+            
+            // Parse specific event types
+            if (event.key === 'um') { // unit_move
+                const coords = event.data.split(' ');
+                if (coords.length >= 4) {
+                    event.startCoord = { c1: parseInt(coords[0]), c2: parseInt(coords[1]) };
+                    event.finishCoord = { c1: parseInt(coords[2]), c2: parseInt(coords[3]) };
+                }
+            } else if (event.key === 'pb') { // piece_build
+                const coords = event.data.split(' ');
+                if (coords.length >= 3) {
+                    event.coord = { c1: parseInt(coords[0]), c2: parseInt(coords[1]) };
+                    event.pieceType = coords[2];
+                }
+            } else if (event.key === 'pa') { // piece_add
+                const coords = event.data.split(' ');
+                if (coords.length >= 3) {
+                    event.coord = { c1: parseInt(coords[0]), c2: parseInt(coords[1]) };
+                    event.pieceType = coords[2];
+                }
+            } else if (event.key === 'pd') { // piece_delete
+                const coords = event.data.split(' ');
+                if (coords.length >= 2) {
+                    event.coord = { c1: parseInt(coords[0]), c2: parseInt(coords[1]) };
+                }
+            } else if (event.key === 'hcc') { // hex_change_color
+                const coords = event.data.split(' ');
+                if (coords.length >= 3) {
+                    event.coord = { c1: parseInt(coords[0]), c2: parseInt(coords[1]) };
+                    event.newColor = coords[2];
+                }
+            } else if (event.key === 'sm') { // set_money
+                const coords = event.data.split(' ');
+                if (coords.length >= 3) {
+                    event.coord = { c1: parseInt(coords[0]), c2: parseInt(coords[1]) };
+                    event.money = parseInt(coords[2]);
+                }
+            } else if (event.key === 'te') { // turn_end
+                // Turn end events don't need special parsing
+            }
+        }
+        
+        parsedEvents.push(event);
+    }
+    
+    return parsedEvents;
+}
+
+function animateEvents(events) {
+    /**
+     * Animate events (placeholder for now - will be implemented later).
+     * For now, just log the events and mark animation as complete.
+     */
+    if (!events || events.length === 0) {
+        isAnimatingEvents = false;
+        return Promise.resolve();
+    }
+    
+    console.log(`Animating ${events.length} events since last player turn:`, events);
+    
+    // TODO: Implement actual animations
+    // For now, just mark as complete immediately
+    // In the future, this will:
+    // 1. Queue animations for each event
+    // 2. Play them in sequence
+    // 3. Resolve the promise when all animations are done
+    
+    isAnimatingEvents = false;
+    return Promise.resolve();
+}
+
 function loadGameState() {
     return fetch('/api/game/state')
         .then(response => response.json())
         .then(data => {
             if (data.success && data.hexes) {
+                // Parse events since last player turn
+                const events = parseEventHistory(data.event_history || []);
+                
+                // If there are events to animate, disable UI and animate them
+                if (events.length > 0) {
+                    isAnimatingEvents = true;
+                    // Disable UI during animation
+                    setUIEnabled(false);
+                    
+                    // Animate events (for now, this is just a placeholder)
+                    animateEvents(events).then(() => {
+                        // After animations complete, enable UI
+                        setUIEnabled(true);
+                        isAnimatingEvents = false;
+                    });
+                } else {
+                    // No events to animate, UI is already enabled
+                    isAnimatingEvents = false;
+                }
+                
                 // Update hexes first (animations will stay visible during this)
                 gameBoard.setHexes(data.hexes);
                 // Set current player color for selection filtering
@@ -431,6 +557,20 @@ function loadGameState() {
             console.error('Error loading game state:', error);
             throw error;
         });
+}
+
+function setUIEnabled(enabled) {
+    /**
+     * Enable or disable the UI (prevent user interaction during animations).
+     */
+    // TODO: Implement UI enable/disable
+    // For now, just log
+    console.log(`UI ${enabled ? 'enabled' : 'disabled'}`);
+    
+    // In the future, this will:
+    // - Disable/enable click handlers
+    // - Show/hide loading overlay
+    // - Disable/enable buttons
 }
 
 function updateStatusBar(data) {

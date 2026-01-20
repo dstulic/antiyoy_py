@@ -489,6 +489,152 @@ def test_unit_movement_distance_with_different_units():
         hexes[0].unit_id = -1
 
 
+def test_unit_movement_never_exceeds_4_hexes():
+    """
+    Test that unit movement zone never includes hexes beyond 4 hexes away.
+    
+    This test ensures the bug where units could move 8+ hexes away is fixed.
+    It verifies:
+    1. All hexes in move zone are within 4 hexes
+    2. Counters are properly reset between calculations
+    3. Multiple calls don't accumulate counters
+    4. Works with different unit types and paths
+    """
+    game_state = GameState()
+    game_state.set_ruleset(RulesType.DEF, version_code=1)
+    
+    # Create a long chain of hexes to test distance limits
+    # (0,0) - unit starting position
+    # (1,0) through (10,0) - chain of hexes (10 hexes away from start)
+    # This ensures we can test that hexes beyond 4 are never included
+    
+    hex_start = game_state.add_hex(0, 0, HColor.RED)
+    hex_start.piece = PieceType.PEASANT
+    
+    # Create a long chain
+    hexes = [hex_start]
+    for i in range(1, 11):
+        hex = game_state.add_hex(i, 0, HColor.RED)
+        hexes.append(hex)
+    
+    _build_adjacency_graph(game_state)
+    
+    from core.player_entity import PlayerEntity
+    player = PlayerEntity(game_state.entities_manager, EntityType.HUMAN, HColor.RED)
+    player.set_name("TestPlayer")
+    if game_state.entities_manager.entities is None:
+        game_state.entities_manager.entities = []
+    game_state.entities_manager.entities.append(player)
+    
+    game_state.provinces_manager.builder.grant_permission()
+    game_state.provinces_manager.builder.apply()
+    
+    # Helper function to calculate hex distance
+    def calculate_hex_distance(hex1, hex2):
+        """Calculate distance between two hexes using axial coordinates."""
+        dq = hex2.coordinate1 - hex1.coordinate1
+        dr = hex2.coordinate2 - hex1.coordinate2
+        return (abs(dq) + abs(dq + dr) + abs(dr)) // 2
+    
+    # Test 1: Verify move zone doesn't exceed 4 hexes for peasant
+    game_state.move_zone_manager.update_for_unit(hex_start)
+    
+    max_distance = 0
+    violations = []
+    for move_hex in game_state.move_zone_manager.hexes:
+        if move_hex == hex_start:
+            continue
+        distance = calculate_hex_distance(hex_start, move_hex)
+        if distance > max_distance:
+            max_distance = distance
+        if distance > 4:
+            violations.append((move_hex, distance, getattr(move_hex, 'counter', None)))
+    
+    assert max_distance <= 4, f"Maximum distance should be <= 4, got {max_distance}"
+    assert len(violations) == 0, \
+        f"Found {len(violations)} hexes beyond 4 hexes: {violations}"
+    
+    # Test 2: Verify multiple calls don't accumulate counters
+    # Call update_for_unit multiple times and verify results are consistent
+    for i in range(3):
+        game_state.move_zone_manager.update_for_unit(hex_start)
+        
+        max_dist = 0
+        for move_hex in game_state.move_zone_manager.hexes:
+            if move_hex == hex_start:
+                continue
+            distance = calculate_hex_distance(hex_start, move_hex)
+            if distance > max_dist:
+                max_dist = distance
+        
+        assert max_dist <= 4, \
+            f"After {i+1} calls, max distance should be <= 4, got {max_dist}"
+    
+    # Test 3: Test with different unit types
+    unit_types = [PieceType.PEASANT, PieceType.SPEARMAN, PieceType.BARON, PieceType.KNIGHT]
+    
+    for unit_type in unit_types:
+        hex_start.piece = unit_type
+        game_state.move_zone_manager.update_for_unit(hex_start)
+        
+        max_dist = 0
+        for move_hex in game_state.move_zone_manager.hexes:
+            if move_hex == hex_start:
+                continue
+            distance = calculate_hex_distance(hex_start, move_hex)
+            if distance > max_dist:
+                max_dist = distance
+        
+        assert max_dist <= 4, \
+            f"{unit_type} should not be able to move beyond 4 hexes, got max distance {max_dist}"
+    
+    # Test 4: Test with a complex path (through enemy hexes)
+    # Create a scenario: friendly hexes -> enemy hex -> friendly hexes
+    # This tests that counters work correctly even when moving through enemy territory
+    hex_start.piece = PieceType.PEASANT
+    
+    # Add some enemy hexes in the chain
+    enemy_hex = game_state.get_hex(2, 0)
+    if enemy_hex:
+        enemy_hex.color = HColor.BLUE  # Enemy color
+    
+    game_state.move_zone_manager.update_for_unit(hex_start)
+    
+    max_dist = 0
+    for move_hex in game_state.move_zone_manager.hexes:
+        if move_hex == hex_start:
+            continue
+        distance = calculate_hex_distance(hex_start, move_hex)
+        if distance > max_dist:
+            max_dist = distance
+    
+    assert max_dist <= 4, \
+        f"Even with enemy hexes in path, max distance should be <= 4, got {max_dist}"
+    
+    # Test 5: Verify counters are properly reset
+    # Check that all hexes have counters that make sense
+    game_state.move_zone_manager.update_for_unit(hex_start)
+    
+    for move_hex in game_state.move_zone_manager.hexes:
+        if move_hex == hex_start:
+            assert hasattr(move_hex, 'counter'), "Start hex should have counter"
+            assert move_hex.counter == 4, f"Start hex counter should be 4, got {move_hex.counter}"
+        else:
+            distance = calculate_hex_distance(hex_start, move_hex)
+            counter = getattr(move_hex, 'counter', None)
+            if counter is not None:
+                # Counter should be: 4 - distance (at most)
+                # Actually, counter represents remaining movement, so:
+                # Start hex: counter = 4
+                # After 1 step: counter = 3
+                # After 2 steps: counter = 2
+                # After 3 steps: counter = 1
+                # After 4 steps: counter = 0
+                expected_counter = 4 - distance
+                assert counter == expected_counter, \
+                    f"Hex at distance {distance} should have counter {expected_counter}, got {counter}"
+
+
 if __name__ == "__main__":
     test_unit_built_on_province_hex_is_ready()
     print("✓ test_unit_built_on_province_hex_is_ready passed")
@@ -510,5 +656,8 @@ if __name__ == "__main__":
     
     test_unit_movement_distance_with_different_units()
     print("✓ test_unit_movement_distance_with_different_units passed")
+    
+    test_unit_movement_never_exceeds_4_hexes()
+    print("✓ test_unit_movement_never_exceeds_4_hexes passed")
     
     print("\nAll tests passed!")

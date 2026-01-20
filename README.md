@@ -44,37 +44,12 @@ Or if the virtual environment is activated:
 pytest tests/ -v
 ```
 
-### Continuous Integration
-
-Tests are automatically run on GitHub Actions for:
-- Python 3.10, 3.11, and 3.12
-- On push to main/master/develop branches
-- On pull requests
-- Can be manually triggered via workflow_dispatch
-
-See `.github/workflows/tests.yml` for the CI configuration.
-
-### Run a specific test file:
-```bash
-pytest tests/test_hex.py -v
-```
-
-### Run a specific test class:
-```bash
-pytest tests/test_hex.py::TestHex -v
-```
-
 ### Run a specific test method:
 ```bash
 pytest tests/test_hex.py::TestHex::test_hex_initialization -v
 ```
 
 ### Run tests with coverage:
-
-First, install the coverage plugin:
-```bash
-pip install pytest-cov
-```
 
 Generate coverage report (terminal output):
 ```bash
@@ -109,16 +84,6 @@ You can also combine both terminal and HTML reports:
 pytest tests/ --cov=core --cov=save_load --cov=players --cov=commands --cov=visibility --cov=ai --cov-report=term --cov-report=html -v
 ```
 
-### Run tests and show print statements:
-```bash
-pytest tests/ -v -s
-```
-
-### Run tests in parallel (faster):
-```bash
-pip install pytest-xdist
-pytest tests/ -n auto
-```
 
 
 ## Project Structure
@@ -132,27 +97,6 @@ pytest tests/ -n auto
 - `ai/` - AI players (random, balancer variants)
 - `tests/` - Unit tests
 
-## Usage Examples
-
-### Decode a campaign level:
-```python
-from save_load.decoder import GameStateDecoder
-from campaign.levels import get_level_code
-
-decoder = GameStateDecoder()
-level_code = get_level_code(1)
-game_state, campaign_index = decoder.decode(level_code)
-print(f"Decoded level with {len(game_state.hexes)} hexes")
-```
-
-### Encode a game state:
-```python
-from save_load.encoder import GameStateEncoder
-
-encoder = GameStateEncoder()
-encoded = encoder.encode(game_state, campaign_level_index=1)
-print(f"Encoded to {len(encoded)} characters")
-```
 
 ## Web Interface
 
@@ -179,13 +123,3 @@ python web/app.py
 
 The web interface will be available at `http://localhost:5000`
 
-### Web Interface Features
-
-- **Landing Page**: Main menu with campaign button
-- **Campaign Selector**: Browse and select available campaign levels
-- **Game Screen**: Play campaign levels with:
-  - Hamburger menu (top left) with options:
-    - Restart: Restart the current level
-    - Save: Save game progress
-    - Exit: Return to main menu
-  - Game board (rendering to be implemented)

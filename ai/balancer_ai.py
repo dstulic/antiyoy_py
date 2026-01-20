@@ -42,6 +42,10 @@ class AiBalancerDefaultV1(AbstractAI):
     
     def apply(self) -> None:
         """Apply AI decision making."""
+        # Update quick stats (hex quantities) before making decisions
+        if hasattr(self.game_state, 'quick_stats_manager') and self.game_state.quick_stats_manager:
+            self.game_state.quick_stats_manager.update()
+        
         # Main AI logic: move units, spend money, merge units, move AFK units
         self.move_units()
         self.spend_money_and_merge_units()
@@ -134,7 +138,7 @@ class AiBalancerDefaultV1(AbstractAI):
         return result
     
     def number_of_adjacent_units(self, hex) -> int:
-        """Count adjacent friendly units."""
+        """Count adjacent friendly units and towers."""
         count = 0
         hex_province = hex.get_province()
         for adj_hex in hex.adjacent_hexes:
@@ -142,15 +146,19 @@ class AiBalancerDefaultV1(AbstractAI):
                 continue
             if hex_province and adj_hex.get_province() != hex_province:
                 continue
-            if not adj_hex.piece or not is_unit(adj_hex.piece):
-                continue
-            count += 1
+            # Include units OR towers (matches Java: hasUnit() || hasTower())
+            if adj_hex.piece:
+                if is_unit(adj_hex.piece) or adj_hex.piece in (PieceType.TOWER, PieceType.STRONG_TOWER):
+                    count += 1
         return count
     
     def get_owned_hexes_quantity(self, color: HColor) -> int:
         """Get number of hexes owned by color."""
         if color == HColor.GRAY:
             return 0
+        if hasattr(self.game_state, 'quick_stats_manager') and self.game_state.quick_stats_manager:
+            return self.game_state.quick_stats_manager.get_quantity(color)
+        # Fallback: count manually if quick stats not available
         count = 0
         for hex in self.game_state.hexes:
             if hex.color == color:
@@ -199,13 +207,11 @@ class AiBalancerDefaultV1(AbstractAI):
                 return self.random.choice(attackable_hexes)
             return None
         
-        # For barons and knights, prefer towers
-        if strength >= 3:
-            for hex in attackable_hexes:
-                if hex.piece == PieceType.TOWER:
-                    return hex
-                if strength == 4 and hex.piece == PieceType.STRONG_TOWER:
-                    return hex
+        # For barons (strength 3) and knights (strength 4), use special logic
+        if strength == 3 or strength == 4:
+            hex = self.find_hex_attractive_to_baron(attackable_hexes, strength)
+            if hex:
+                return hex
         
         # Find hex with highest attack allure
         best_hex = None
@@ -216,6 +222,22 @@ class AiBalancerDefaultV1(AbstractAI):
                 best_allure = allure
                 best_hex = hex
         return best_hex
+    
+    def find_hex_attractive_to_baron(self, attackable_hexes: List, strength: int):
+        """Find hex attractive to baron/knight (balancer difficulty only)."""
+        if self.is_difficulty_less_than(Difficulty.BALANCER):
+            return None
+        # Prefer towers first
+        for hex in attackable_hexes:
+            if hex.piece == PieceType.TOWER:
+                return hex
+            if strength == 4 and hex.piece == PieceType.STRONG_TOWER:
+                return hex
+        # Then prefer hexes defended by towers
+        for hex in attackable_hexes:
+            if self.is_defended_by_tower(hex):
+                return hex
+        return None
     
     def get_attack_allure(self, hex, color: HColor) -> int:
         """Calculate attack allure for a hex."""
@@ -292,28 +314,30 @@ class AiBalancerDefaultV1(AbstractAI):
     
     def exclude_friendly_buildings_from_move_zone(self, move_zone: List) -> None:
         """Exclude friendly buildings from move zone."""
+        self.temp_list.clear()
         current_color = self.get_current_color()
-        to_remove = []
         for hex in move_zone:
             if hex.color != current_color:
                 continue
-            if hex.piece and hex.piece not in (PieceType.PINE, PieceType.PALM):
-                if not is_unit(hex.piece):
-                    to_remove.append(hex)
-        for hex in to_remove:
+            # Exclude static pieces (but not trees)
+            if hex.has_static_piece() and not hex.has_tree():
+                self.temp_list.append(hex)
+        # Remove all items in temp_list from move_zone
+        for hex in self.temp_list:
             if hex in move_zone:
                 move_zone.remove(hex)
     
     def exclude_friendly_units_from_move_zone(self, move_zone: List) -> None:
         """Exclude friendly units from move zone."""
+        self.temp_list.clear()
         current_color = self.get_current_color()
-        to_remove = []
         for hex in move_zone:
             if hex.color != current_color:
                 continue
-            if hex.piece and is_unit(hex.piece):
-                to_remove.append(hex)
-        for hex in to_remove:
+            if hex.has_unit():
+                self.temp_list.append(hex)
+        # Remove all items in temp_list from move_zone
+        for hex in self.temp_list:
             if hex in move_zone:
                 move_zone.remove(hex)
     
@@ -344,6 +368,7 @@ class AiBalancerDefaultV1(AbstractAI):
         if not province.is_valid():
             return
         self.try_to_build_units_on_palms(province)
+        self.try_to_reinforce_units(province)
         
         for strength in range(1, 5):  # 1 to 4
             if not self.can_afford_unit(province, strength, 5):
@@ -376,10 +401,9 @@ class AiBalancerDefaultV1(AbstractAI):
         while count > 0 and self.can_afford_unit(province, 1):
             count -= 1
             self.get_ruleset().update_move_zone_for_unit_construction(province, 1)
-            move_zone = self.get_move_zone_manager().hexes
-            
+            self.copy_move_zone_to_temp_list()
             killed_palm = False
-            for hex in move_zone:
+            for hex in self.temp_list:
                 if hex.piece != PieceType.PALM:
                     continue
                 if hex.color != province.get_color():
@@ -389,6 +413,11 @@ class AiBalancerDefaultV1(AbstractAI):
                     break
             if not killed_palm:
                 break
+    
+    def copy_move_zone_to_temp_list(self) -> None:
+        """Copy move zone to temp list."""
+        self.temp_list.clear()
+        self.temp_list.extend(self.get_move_zone_manager().hexes)
     
     def try_to_attack_with_strength(self, province, strength: int) -> bool:
         """Try to attack with a unit of given strength."""
@@ -402,6 +431,41 @@ class AiBalancerDefaultV1(AbstractAI):
         best_hex = self.find_most_attractive_hex(attackable_hexes, province.get_color(), strength)
         if best_hex:
             return self.command_unit_build(province, best_hex, strength)
+        return False
+    
+    def try_to_reinforce_units(self, province) -> None:
+        """Try to reinforce units (balancer difficulty only)."""
+        if self.is_difficulty_less_than(Difficulty.BALANCER):
+            return
+        for hex in province.get_hexes():
+            if not hex.piece or not is_unit(hex.piece):
+                continue
+            strength = self.get_strength(hex)
+            if self.unit_has_to_be_reinforced(hex) and self.can_afford_unit(province, strength + 1):
+                self.command_unit_build(province, hex, 1)
+    
+    def unit_has_to_be_reinforced(self, unit_hex) -> bool:
+        """Check if unit needs to be reinforced."""
+        strength = self.get_strength(unit_hex)
+        if strength == 4:
+            return False
+        
+        self.get_move_zone_manager().update_for_unit(unit_hex)
+        move_zone = self.get_move_zone_manager().hexes
+        if not self.move_zone_contains_enemy_hexes(move_zone, unit_hex.color):
+            return False
+        
+        attackable_hexes = self.find_attackable_hexes(unit_hex.color, move_zone)
+        if len(attackable_hexes) > 0:
+            return False
+        
+        return True
+    
+    def move_zone_contains_enemy_hexes(self, move_zone: List, color: HColor) -> bool:
+        """Check if move zone contains enemy hexes."""
+        for hex in move_zone:
+            if hex.color != color:
+                return True
         return False
     
     def how_many_units_in_province(self, province) -> int:
@@ -610,9 +674,27 @@ class AiBalancerDefaultV1(AbstractAI):
             for hex in src.get_hexes():
                 for adj_hex in hex.adjacent_hexes:
                     self.check_to_add_nearby_province(hex, adj_hex)
-        else:  # It's a hex
-            for adj_hex in src.adjacent_hexes:
-                self.check_to_add_nearby_province(src, adj_hex)
+        else:  # It's a hex - use rotated pattern
+            from core.fog_of_war import DirectionsManager
+            directions_manager = DirectionsManager(self.game_state)
+            for dir in range(6):
+                adjacent_hex = directions_manager.get_adjacent_hex(src, dir)
+                if not adjacent_hex:
+                    continue
+                
+                # Get hex in same direction
+                adjacent_hex2 = directions_manager.get_adjacent_hex(adjacent_hex, dir)
+                # Get hex in rotated direction
+                rotated_dir = dir + 1
+                if rotated_dir >= 6:
+                    rotated_dir = 0
+                adjacent_hex3 = directions_manager.get_adjacent_hex(adjacent_hex, rotated_dir)
+                
+                self.check_to_add_nearby_province(src, adjacent_hex)
+                if adjacent_hex2:
+                    self.check_to_add_nearby_province(src, adjacent_hex2)
+                if adjacent_hex3:
+                    self.check_to_add_nearby_province(src, adjacent_hex3)
     
     def check_to_add_nearby_province(self, src_hex, adj_hex) -> None:
         """Check and add nearby province."""
@@ -762,28 +844,21 @@ class AiBalancerDefaultV1(AbstractAI):
         if not target_hex:
             return
         
-        # Try to move towards target
+        # Try to use mass march emulation first
+        if not self.emulate_mass_march_for_single_unit(hex, target_hex):
+            # Fallback: move quickly to prevent infinite loop
+            self.move_afk_unit_quickly(hex)
+    
+    def move_afk_unit_quickly(self, hex) -> None:
+        """Move AFK unit quickly (fallback)."""
         self.get_move_zone_manager().update_for_unit(hex)
         move_zone = self.get_move_zone_manager().hexes
         self.exclude_friendly_units_from_move_zone(move_zone)
         self.exclude_friendly_buildings_from_move_zone(move_zone)
-        
         if len(move_zone) == 0:
             return
-        
-        # Find closest hex to target
-        best_hex = None
-        min_distance = float('inf')
-        for candidate_hex in move_zone:
-            # Simple distance calculation
-            dist = abs(candidate_hex.coordinate1 - target_hex.coordinate1) + \
-                   abs(candidate_hex.coordinate2 - target_hex.coordinate2)
-            if dist < min_distance:
-                min_distance = dist
-                best_hex = candidate_hex
-        
-        if best_hex:
-            self.command_unit_move(hex, best_hex)
+        target_hex = self.random.choice(move_zone)
+        self.command_unit_move(hex, target_hex)
     
     def find_random_hex_in_perimeter(self, province):
         """Find a random hex in province perimeter."""
