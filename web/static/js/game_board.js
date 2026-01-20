@@ -220,6 +220,9 @@ class GameBoard {
             this.drawHex(hex);
         }
         
+        // Draw outlines on top of hexes (selection, placement, movement)
+        this.drawAllOutlines();
+        
         // Render animations on top (so they appear above hexes)
         if (this.animationSystem) {
             this.animationSystem.render(this);
@@ -280,7 +283,6 @@ class GameBoard {
                     coordinate2: hex.coordinate2
                 })) {
                     // Unit is being animated, skip drawing it here (it will be drawn by animation system)
-                    // Continue to draw other elements like selection border
                 } else {
                     // Apply opacity for units that have moved (not ready)
                     const opacity = (hex.piece && isUnitPiece(hex.piece) && hex.is_ready === false) ? 0.5 : 1.0;
@@ -290,23 +292,6 @@ class GameBoard {
                 // Not a unit, draw normally
                 this.drawPiece(x, y, hex.piece, 1.0);
             }
-        }
-        
-        // Draw selection border if selected
-        if (this.selectedHex && 
-            this.selectedHex.coordinate1 === hex.coordinate1 &&
-            this.selectedHex.coordinate2 === hex.coordinate2) {
-            this.drawSelectionBorder(x, y);
-        }
-        
-        // Draw placement outline if in placement mode and hex is valid
-        if (this.placementMode && this.isValidPlacementHex(hex)) {
-            this.drawPlacementOutline(x, y);
-        }
-        
-        // Draw movement outline if in movement mode and hex is valid
-        if (this.movementMode && this.isValidMovementHex(hex)) {
-            this.drawMovementOutline(x, y);
         }
         
         // Draw defense indicators if showing
@@ -540,6 +525,61 @@ class GameBoard {
         ctx.closePath();
         ctx.stroke();
         ctx.restore();
+    }
+    
+    drawAllOutlines() {
+        // Draw all outlines after hexes are rendered so they appear on top
+        const worldHexSize = this.hexSize * this.spacingMultiplier;
+        
+        // Draw selection border
+        if (this.selectedHex) {
+            const pos = hexToPixel(this.selectedHex.coordinate1, this.selectedHex.coordinate2, worldHexSize);
+            const x = (pos.x * this.scale) + this.offsetX;
+            const y = (pos.y * this.scale) + this.offsetY;
+            this.drawSelectionBorder(x, y);
+        }
+        
+        // Draw placement outlines
+        if (this.placementMode && this.validPlacementHexes.length > 0) {
+            for (const validHex of this.validPlacementHexes) {
+                const hex = this.hexes.find(h => 
+                    h.coordinate1 === validHex.coordinate1 && 
+                    h.coordinate2 === validHex.coordinate2
+                );
+                if (hex) {
+                    const pos = hexToPixel(hex.coordinate1, hex.coordinate2, worldHexSize);
+                    const x = (pos.x * this.scale) + this.offsetX;
+                    const y = (pos.y * this.scale) + this.offsetY;
+                    // Skip if outside viewport
+                    const effectiveSize = this.hexSize * this.scale;
+                    if (x >= -effectiveSize && x <= this.canvas.width + effectiveSize &&
+                        y >= -effectiveSize && y <= this.canvas.height + effectiveSize) {
+                        this.drawPlacementOutline(x, y);
+                    }
+                }
+            }
+        }
+        
+        // Draw movement outlines
+        if (this.movementMode && this.validMovementHexes.length > 0) {
+            for (const validHex of this.validMovementHexes) {
+                const hex = this.hexes.find(h => 
+                    h.coordinate1 === validHex.coordinate1 && 
+                    h.coordinate2 === validHex.coordinate2
+                );
+                if (hex) {
+                    const pos = hexToPixel(hex.coordinate1, hex.coordinate2, worldHexSize);
+                    const x = (pos.x * this.scale) + this.offsetX;
+                    const y = (pos.y * this.scale) + this.offsetY;
+                    // Skip if outside viewport
+                    const effectiveSize = this.hexSize * this.scale;
+                    if (x >= -effectiveSize && x <= this.canvas.width + effectiveSize &&
+                        y >= -effectiveSize && y <= this.canvas.height + effectiveSize) {
+                        this.drawMovementOutline(x, y);
+                    }
+                }
+            }
+        }
     }
     
     // drawGrayedOutUnit is no longer needed - we use opacity in drawPiece instead
