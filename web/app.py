@@ -1657,6 +1657,331 @@ def api_unit_tests_state():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/unit_tests/save/<test_name>', methods=['POST'])
+def api_unit_tests_save(test_name):
+    """Save current game state to map file."""
+    try:
+        session_id = session.get('session_id')
+        print(f"=== SAVE MAP ENDPOINT ===")
+        print(f"Save map - Session ID from cookie: {session_id}")
+        print(f"Save map - Available sessions: {list(game_sessions.keys())}")
+        
+        if not session_id or session_id not in game_sessions:
+            # Try to find session by test name as fallback
+            for sid, data in game_sessions.items():
+                if data.get('test_name') == test_name:
+                    print(f"Found session by test name: {sid}")
+                    session['session_id'] = sid
+                    session_id = sid
+                    session.modified = True
+                    break
+            if not session_id or session_id not in game_sessions:
+                return jsonify({'success': False, 'error': f'No active test session. Session ID: {session_id}'}), 404
+        
+        session_data = game_sessions[session_id]
+        if session_data.get('test_name') != test_name:
+            return jsonify({'success': False, 'error': 'Test name mismatch'}), 400
+        
+        test = session_data.get('test_instance')
+        # Save the current game state (which should be the initial state after reset in edit mode)
+        # This is what the map file represents - the base state before test runs
+        current_state = session_data.get('game_state')
+        
+        if not test or not current_state:
+            return jsonify({'success': False, 'error': 'Test or game state not available'}), 500
+        
+        # Save the current game state to map file
+        success = test.save_map(current_state)
+        
+        if success:
+            # Reload the map to get fresh initial state
+            fresh_initial_state = test.load_map()
+            if fresh_initial_state:
+                from save_load.decoder import _build_adjacency_graph
+                _build_adjacency_graph(fresh_initial_state)
+                
+                # Update session with fresh initial state (use deepcopy to avoid reference issues)
+                import copy
+                session_data['initial_state'] = copy.deepcopy(fresh_initial_state)
+                session_data['game_state'] = copy.deepcopy(fresh_initial_state)
+                session_data['state_mode'] = 'initial'
+                session_data['final_state'] = None  # Clear final state since we're resetting
+            
+            return jsonify({'success': True, 'message': 'Map saved successfully'})
+        else:
+            return jsonify({'success': False, 'error': 'Failed to save map file'}), 500
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/unit_tests/province/<coordinate1>/<coordinate2>')
+def api_unit_tests_province(coordinate1, coordinate2):
+    """Get province data for a hex (for edit mode - works for all provinces)."""
+    try:
+        # Convert string coordinates to integers (handles negative numbers)
+        try:
+            coord1 = int(coordinate1)
+            coord2 = int(coordinate2)
+        except ValueError:
+            return jsonify({'success': False, 'error': 'Invalid coordinates'}), 400
+        
+        session_id = session.get('session_id')
+        if not session_id or session_id not in game_sessions:
+            # Try to find session by test name as fallback
+            for sid, data in game_sessions.items():
+                session_id = sid
+                session['session_id'] = sid
+                session.modified = True
+                break
+            if not session_id or session_id not in game_sessions:
+                return jsonify({'success': False, 'error': 'No active test session'}), 404
+        
+        session_data = game_sessions[session_id]
+        game_state = session_data.get('game_state')
+        
+        if not game_state:
+            return jsonify({'success': False, 'error': 'Game state not available'}), 500
+        
+        # Get the hex
+        hex_obj = game_state.get_hex(coord1, coord2)
+        if not hex_obj:
+            return jsonify({
+                'success': True,
+                'province_id': None,
+                'money': 0,
+                'income': 0,
+                'consumption': 0,
+                'profit': 0,
+                'city_name': '',
+                'piece_costs': {},
+                'piece_maintenance': {},
+                'piece_strength': {},
+                'province_color': None
+            })
+        
+        # Get the province for this hex
+        province = hex_obj.get_province()
+        if not province:
+            # Try to find province slowly as fallback
+            province = game_state.provinces_manager.find_province_slowly(hex_obj)
+        
+        if not province:
+            return jsonify({
+                'success': True,
+                'province_id': None,
+                'money': 0,
+                'income': 0,
+                'consumption': 0,
+                'profit': 0,
+                'city_name': '',
+                'piece_costs': {},
+                'piece_maintenance': {},
+                'piece_strength': {},
+                'province_color': None
+            })
+        
+        # Calculate income, consumption, and profit
+        if game_state.economics_manager:
+            income = game_state.economics_manager.calculate_province_income(province)
+            consumption = game_state.economics_manager.calculate_province_consumption(province)
+            profit = game_state.economics_manager.calculate_province_profit(province)
+        else:
+            income = 0
+            consumption = 0
+            profit = 0
+        
+        # Get piece costs and strength (for display, but costs are ignored in edit mode)
+        piece_costs = {}
+        piece_maintenance = {}
+        piece_strength = {}
+        if game_state.ruleset:
+            from core.enums import PieceType
+            piece_costs = {
+                'peasant': game_state.ruleset.get_price(province, PieceType.PEASANT),
+                'spearman': game_state.ruleset.get_price(province, PieceType.SPEARMAN),
+                'baron': game_state.ruleset.get_price(province, PieceType.BARON),
+                'knight': game_state.ruleset.get_price(province, PieceType.KNIGHT),
+                'tower': game_state.ruleset.get_price(province, PieceType.TOWER),
+                'strong_tower': game_state.ruleset.get_price(province, PieceType.STRONG_TOWER),
+                'farm': game_state.ruleset.get_price(province, PieceType.FARM),
+            }
+            
+            piece_maintenance = {
+                'peasant': -game_state.ruleset.get_consumption(PieceType.PEASANT),
+                'spearman': -game_state.ruleset.get_consumption(PieceType.SPEARMAN),
+                'baron': -game_state.ruleset.get_consumption(PieceType.BARON),
+                'knight': -game_state.ruleset.get_consumption(PieceType.KNIGHT),
+                'tower': -game_state.ruleset.get_consumption(PieceType.TOWER),
+                'strong_tower': -game_state.ruleset.get_consumption(PieceType.STRONG_TOWER),
+                'farm': game_state.ruleset.get_hex_income(PieceType.FARM),
+            }
+            
+            from core.core_utils import get_strength
+            piece_strength = {
+                'peasant': get_strength(PieceType.PEASANT),
+                'spearman': get_strength(PieceType.SPEARMAN),
+                'baron': get_strength(PieceType.BARON),
+                'knight': get_strength(PieceType.KNIGHT),
+                'tower': game_state.ruleset.get_defense_value(PieceType.TOWER),
+                'strong_tower': game_state.ruleset.get_defense_value(PieceType.STRONG_TOWER),
+                'farm': None,
+            }
+        
+        # Get province color
+        province_color_value = None
+        if province:
+            province_color = province.get_color()
+            if province_color:
+                province_color_value = province_color.value if hasattr(province_color, 'value') else str(province_color)
+        
+        return jsonify({
+            'success': True,
+            'province_id': province.get_id(),
+            'money': province.get_money(),
+            'income': income,
+            'consumption': consumption,
+            'profit': profit,
+            'city_name': province.get_name() if hasattr(province, 'get_name') else '',
+            'piece_costs': piece_costs,
+            'piece_maintenance': piece_maintenance,
+            'piece_strength': piece_strength,
+            'province_color': province_color_value
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/unit_tests/build', methods=['POST'])
+def api_unit_tests_build():
+    """Build a piece in edit mode (free, no cost validation)."""
+    try:
+        session_id = session.get('session_id')
+        if not session_id or session_id not in game_sessions:
+            # Try to find session as fallback
+            for sid, data in game_sessions.items():
+                session_id = sid
+                session['session_id'] = sid
+                session.modified = True
+                break
+            if not session_id or session_id not in game_sessions:
+                return jsonify({'success': False, 'error': 'No active test session'}), 404
+        
+        session_data = game_sessions[session_id]
+        game_state = session_data.get('game_state')
+        
+        if not game_state:
+            return jsonify({'success': False, 'error': 'Game state not available'}), 500
+        
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'No data provided'}), 400
+        
+        # Get parameters
+        try:
+            coordinate1 = int(data.get('coordinate1'))
+            coordinate2 = int(data.get('coordinate2'))
+            piece_type_str = data.get('piece_type')
+            province_coord1 = data.get('province_coordinate1')
+            province_coord2 = data.get('province_coordinate2')
+        except (ValueError, TypeError) as e:
+            return jsonify({'success': False, 'error': f'Invalid parameters: {e}'}), 400
+        
+        if not piece_type_str:
+            return jsonify({'success': False, 'error': 'piece_type is required'}), 400
+        
+        # Convert piece type string to enum
+        from core.enums import PieceType
+        try:
+            piece_type = PieceType(piece_type_str.lower())
+        except ValueError:
+            return jsonify({'success': False, 'error': f'Invalid piece type: {piece_type_str}'}), 400
+        
+        # Get the target hex
+        hex_obj = game_state.get_hex(coordinate1, coordinate2)
+        if not hex_obj:
+            return jsonify({'success': False, 'error': 'Hex not found'}), 404
+        
+        province_hex = None
+        if province_coord1 is not None and province_coord2 is not None:
+            try:
+                province_hex = game_state.get_hex(int(province_coord1), int(province_coord2))
+            except (ValueError, TypeError):
+                pass
+        
+        # In edit mode, we allow building for any province
+        # Get province from hex or province_hex
+        if not province_hex:
+            province_hex = hex_obj
+        
+        # Create build command
+        from commands.types import BuildPieceCommand
+        from commands.executor import CommandExecutor
+        
+        command = BuildPieceCommand(
+            hex=hex_obj,
+            piece_type=piece_type,
+            province_hex=province_hex
+        )
+        
+        # In edit mode, bypass validation entirely and call executor's internal method directly
+        # This allows building for any province without ownership/turn/cost restrictions
+        executor = CommandExecutor(game_state)
+        
+        # Get province for the build
+        province = province_hex.get_province() if province_hex else hex_obj.get_province()
+        if not province:
+            province = game_state.provinces_manager.find_province_slowly(hex_obj)
+        
+        if not province:
+            return jsonify({'success': False, 'error': 'Province not found'}), 400
+        
+        # Temporarily set province money to a high value (executor doesn't check money, but just in case)
+        original_money = None
+        if province:
+            original_money = province.get_money()
+            province.set_money(999999)
+        
+        try:
+            # In edit mode, directly call the executor's internal method to bypass all validation
+            # This skips ownership checks, turn checks, and cost checks
+            success, error = executor._execute_build_piece(command)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return jsonify({'success': False, 'error': f'Exception during build: {str(e)}'}), 500
+        finally:
+            # Restore original money
+            if province and original_money is not None:
+                province.set_money(original_money)
+        
+        if success:
+            # Update session state
+            session_data['game_state'] = game_state
+            
+            return jsonify({
+                'success': True,
+                'message': f'Built {piece_type.value} successfully'
+            })
+        else:
+            # Log the error for debugging
+            print(f"Build failed in edit mode: {error}")
+            print(f"  Hex: ({coordinate1}, {coordinate2}), Piece type: {piece_type_str}")
+            print(f"  Hex has piece: {hex_obj.piece}")
+            print(f"  Province: {province}")
+            return jsonify({'success': False, 'error': error or 'Build failed'}), 400
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 def _serialize_game_state_for_test(game_state):
     """Serialize game state for visual test display."""
     # Get all hexes (no fog of war for tests)

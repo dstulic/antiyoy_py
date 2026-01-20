@@ -12,28 +12,36 @@ class OneMoveAITest(VisualTest):
     """Test that executes a single AI move."""
     
     def setup(self) -> GameState:
-        """Set up level 2 initial state."""
-        level_code = get_level_code(2)
-        decoder = GameStateDecoder()
-        result = decoder.decode(level_code)
-        
-        if isinstance(result, tuple):
-            game_state, _ = result
-        else:
-            game_state = result
+        """Set up initial state from map file, or create from level 2 if map doesn't exist."""
+        # Try to load from map file first
+        game_state = self.load_map()
         
         if game_state is None:
-            raise ValueError("Failed to decode level 2")
-        
-        # Ensure adjacency graph is built
-        from save_load.decoder import _build_adjacency_graph
-        _build_adjacency_graph(game_state)
-        
-        # Initialize starting money for all provinces
-        from core.enums import EventType, PieceType
-        for province in game_state.provinces_manager.provinces:
-            if province.get_money() == 0:
-                province.set_money(10)
+            # Map file doesn't exist, create initial state from level 2
+            level_code = get_level_code(2)
+            decoder = GameStateDecoder()
+            result = decoder.decode(level_code)
+            
+            if isinstance(result, tuple):
+                game_state, _ = result
+            else:
+                game_state = result
+            
+            if game_state is None:
+                raise ValueError("Failed to decode level 2")
+            
+            # Ensure adjacency graph is built
+            from save_load.decoder import _build_adjacency_graph
+            _build_adjacency_graph(game_state)
+            
+            # Initialize starting money for all provinces
+            from core.enums import EventType, PieceType
+            for province in game_state.provinces_manager.provinces:
+                if province.get_money() == 0:
+                    province.set_money(10)
+            
+            # Save the initial state to map file for future use
+            self.save_map(game_state)
         
         return game_state
     

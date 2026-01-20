@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Test Runner - {{ test_name }}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/game.css') }}">
     <style>
         .test-runner-container {
             display: flex;
@@ -50,18 +51,89 @@
             overflow: hidden;
             position: relative;
         }
+        /* Status bar and actions bar - hidden by default, shown in edit mode */
+        #editStatusBar, #editActionsBar {
+            display: none;
+            position: relative !important; /* Override fixed positioning from game.css */
+            top: auto !important;
+            left: auto !important;
+            right: auto !important;
+            z-index: 10;
+            flex-shrink: 0;
+        }
+        .edit-mode #editStatusBar, .edit-mode #editActionsBar {
+            display: flex;
+        }
+        /* Game board should fill remaining space and have no margin */
+        /* Override game.css styles for test runner */
+        #testGameBoard.game-board {
+            width: 100%;
+            position: relative;
+            overflow: hidden;
+            background: #1a1a2e;
+            margin-top: 0 !important; /* Remove margin from game.css */
+        }
+        /* In edit mode, account for test controls + status bar + actions bar */
+        .edit-mode #testGameBoard {
+            height: calc(100vh - 50px - 70px - 60px); /* 50px status + 70px actions + ~60px test controls */
+        }
+        /* When not in edit mode, account for test controls only */
+        .test-runner-container:not(.edit-mode) #testGameBoard {
+            height: calc(100vh - 60px); /* ~60px for test controls */
+        }
     </style>
 </head>
 <body>
-    <div class="test-runner-container">
+    <div class="test-runner-container" id="testRunnerContainer">
         <div class="test-controls">
             <button id="homeBtn" onclick="goHome()">Home</button>
             <button id="backBtn" onclick="goBack()" disabled>← Back</button>
             <button id="resetBtn" onclick="resetTest()">Reset</button>
             <button id="playBtn" onclick="runTest()">Play</button>
             <button id="forwardBtn" onclick="goForward()" disabled>Forward →</button>
+            <button id="editBtn" onclick="enterEditMode()">Edit</button>
+            <button id="saveBtn" onclick="saveMap()" disabled style="display: none;">Save</button>
             <div class="test-name-label" id="testNameLabel">{{ test_name }}</div>
         </div>
+        
+        <!-- Status Bar (shown only in edit mode) -->
+        <div class="status-bar" id="editStatusBar">
+            <div class="status-items-container">
+                <div class="status-item">
+                    <span class="status-label" id="editStatusCityName">Edit Mode</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Funds:</span>
+                    <span class="status-value" id="editStatusFunds">-</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Profit:</span>
+                    <span class="status-value" id="editStatusProfit">-</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Owned:</span>
+                    <span class="status-value" id="editStatusOwnedHex">-</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Turn:</span>
+                    <span class="status-value" id="editStatusTurn">-</span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Actions Bar (shown only in edit mode) -->
+        <div class="actions-bar" id="editActionsBar">
+            <button class="action-button" id="editUndoBtn" onclick="editUndoAction()" title="Undo" style="display: none;">
+                <span class="action-icon">↶</span>
+            </button>
+            <div class="build-menu-inline" id="editBuildMenu" style="display: none;">
+                <!-- Build items will be populated here -->
+            </div>
+            <button class="action-button" id="editEndTurnBtn" onclick="editEndTurn()" title="End Turn" style="display: none;">
+                <span class="action-icon">→</span>
+            </button>
+        </div>
+        
         <div class="game-container">
             <div id="testGameBoard" class="game-board"></div>
         </div>
@@ -88,6 +160,7 @@
         let currentTestIndex = -1;
         let gameBoard = null;
         let stateMode = 'initial'; // 'initial' or 'final'
+        let editMode = false; // Whether we're in edit mode
         
         // Initialize game board
         window.addEventListener('load', () => {
@@ -123,6 +196,24 @@
             
             backBtn.disabled = currentTestIndex <= 0;
             forwardBtn.disabled = currentTestIndex >= allTests.length - 1;
+        }
+        
+        function updateButtonStates() {
+            // Update button states based on edit mode
+            if (editMode) {
+                document.getElementById('homeBtn').disabled = true;
+                document.getElementById('backBtn').disabled = true;
+                document.getElementById('resetBtn').disabled = true;
+                document.getElementById('playBtn').disabled = true;
+                document.getElementById('forwardBtn').disabled = true;
+                document.getElementById('editBtn').disabled = true;
+            } else {
+                document.getElementById('homeBtn').disabled = false;
+                updateNavigationButtons();
+                document.getElementById('resetBtn').disabled = false;
+                document.getElementById('playBtn').disabled = false;
+                document.getElementById('editBtn').disabled = false;
+            }
         }
         
         async function initTest() {
@@ -194,6 +285,10 @@
                 if (data.current_color) {
                     gameBoard.setCurrentPlayerColor(data.current_color);
                 }
+                // In edit mode, clear currentPlayerColor to allow selecting any hex
+                if (editMode && gameBoard) {
+                    gameBoard.currentPlayerColor = null;
+                }
                 // Resize canvas to fit container
                 gameBoard.resize();
                 // Render the board
@@ -223,6 +318,398 @@
             if (currentTestIndex < allTests.length - 1) {
                 const nextTest = allTests[currentTestIndex + 1];
                 window.location.href = `/unit_tests/run/${encodeURIComponent(nextTest)}`;
+            }
+        }
+        
+        async function enterEditMode() {
+            if (editMode) return; // Already in edit mode
+            
+            editMode = true;
+            updateButtonStates();
+            
+            // Add edit-mode class to container to show status/actions bars
+            document.getElementById('testRunnerContainer').classList.add('edit-mode');
+            
+            // Show and enable save button
+            const saveBtn = document.getElementById('saveBtn');
+            saveBtn.style.display = 'inline-block';
+            saveBtn.disabled = false;
+            
+            // Reset to base state
+            await resetTest();
+            
+            // Clear currentPlayerColor in edit mode to allow selecting any hex
+            if (gameBoard) {
+                gameBoard.currentPlayerColor = null;
+                gameBoard.render();
+            }
+            
+            // Set up edit mode click handler
+            if (gameBoard) {
+                setupEditModeClickHandler();
+            }
+            
+            // Update status bar
+            updateEditStatusBar();
+            
+            // Update status bar when hex is clicked
+            if (gameBoard) {
+                const originalOnHexClick = gameBoard.onHexClick;
+                gameBoard.onHexClick = function(hex) {
+                    if (originalOnHexClick) originalOnHexClick(hex);
+                    // Update status bar with province info
+                    fetch(`/api/unit_tests/province/${hex.coordinate1}/${hex.coordinate2}`, {
+                        credentials: 'include'
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success && data.province_id) {
+                            const statusCityName = document.getElementById('editStatusCityName');
+                            const statusFunds = document.getElementById('editStatusFunds');
+                            const statusProfit = document.getElementById('editStatusProfit');
+                            
+                            if (statusCityName) {
+                                statusCityName.textContent = data.city_name || 'Edit Mode';
+                            }
+                            if (statusFunds) {
+                                statusFunds.textContent = data.money || '0';
+                            }
+                            if (statusProfit) {
+                                statusProfit.textContent = data.profit || '0';
+                                statusProfit.className = 'status-value ' + (data.profit >= 0 ? 'positive' : 'negative');
+                            }
+                        }
+                    });
+                };
+            }
+        }
+        
+        function setupEditModeClickHandler() {
+            if (!gameBoard) return;
+            
+            // Save original click handler
+            if (!gameBoard._originalHandleClick) {
+                gameBoard._originalHandleClick = gameBoard.handleClick.bind(gameBoard);
+            }
+            
+            // Override the click handler to allow clicking on any hex in edit mode
+            gameBoard.handleClick = function(e) {
+                // Handle middle mouse button for recentering (from original handler)
+                if (e.button === 1) {
+                    e.preventDefault();
+                    const rect = this.canvas.getBoundingClientRect();
+                    const x = e.clientX - rect.left;
+                    const y = e.clientY - rect.top;
+                    
+                    const worldX = (x - this.offsetX) / this.scale;
+                    const worldY = (y - this.offsetY) / this.scale;
+                    
+                    this.offsetX = this.canvas.width / 2 - worldX * this.scale;
+                    this.offsetY = this.canvas.height / 2 - worldY * this.scale;
+                    
+                    this.render();
+                    return;
+                }
+                
+                // In edit mode, allow clicking on any hex
+                const rect = this.canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                
+                const worldX = (x - this.offsetX) / this.scale;
+                const worldY = (y - this.offsetY) / this.scale;
+                const effectiveHexSize = this.hexSize * this.spacingMultiplier;
+                const hexCoords = pixelToHex(worldX, worldY, effectiveHexSize);
+                
+                const hex = this.hexes.find(h => 
+                    h.coordinate1 === hexCoords.q && 
+                    h.coordinate2 === hexCoords.r
+                );
+                
+                if (hex) {
+                    // Select hex and show build menu for any province
+                    this.selectedHex = hex;
+                    this.selectedHexForBuild = hex;
+                    this.render();
+                    
+                    // Show build menu for this hex (for any province in edit mode)
+                    populateEditBuildMenu(hex);
+                    
+                    // Call onHexClick callback if set
+                    if (this.onHexClick) {
+                        this.onHexClick(hex);
+                    }
+                } else {
+                    // Clicked on empty space - hide build menu
+                    const buildMenu = document.getElementById('editBuildMenu');
+                    if (buildMenu) {
+                        buildMenu.style.display = 'none';
+                    }
+                }
+            };
+        }
+        
+        function populateEditBuildMenu(hex) {
+            const buildMenu = document.getElementById('editBuildMenu');
+            if (!buildMenu) {
+                console.error('populateEditBuildMenu: editBuildMenu element not found');
+                return;
+            }
+            
+            console.log('populateEditBuildMenu: Fetching province data for hex:', hex.coordinate1, hex.coordinate2);
+            buildMenu.innerHTML = '';
+            
+            // Fetch province data (for any province in edit mode)
+            fetch(`/api/unit_tests/province/${hex.coordinate1}/${hex.coordinate2}`, {
+                credentials: 'include'
+            })
+                .then(response => response.json())
+                .then(data => {
+                    console.log('populateEditBuildMenu: Province data received:', data);
+                    if (!data.success) {
+                        console.warn('populateEditBuildMenu: Request failed:', data.error);
+                        buildMenu.style.display = 'none';
+                        return;
+                    }
+                    
+                    // Check if province exists (province_id can be 0, so check if it's null/undefined or -1)
+                    // -1 means province ID not set, null/undefined means no province
+                    if (data.province_id === null || data.province_id === undefined || data.province_id === -1) {
+                        console.warn('populateEditBuildMenu: No province found for hex. province_id:', data.province_id);
+                        buildMenu.style.display = 'none';
+                        return;
+                    }
+                    
+                    console.log('populateEditBuildMenu: Showing build menu for province:', data.province_id);
+                    buildMenu.style.display = 'flex';
+                    
+                    // In edit mode, all items are free (cost = 0)
+                    const items = [
+                        { type: 'farm', name: 'Farm', cost: 0, maintenance: 0, strength: null },
+                        { type: 'tower', name: 'Tower', cost: 0, maintenance: 0, strength: data.piece_strength?.tower || 0 },
+                        { type: 'strong_tower', name: 'Strong Tower', cost: 0, maintenance: 0, strength: data.piece_strength?.strong_tower || 0 },
+                        { type: 'peasant', name: 'Peasant', cost: 0, maintenance: 0, strength: data.piece_strength?.peasant || 1 },
+                        { type: 'spearman', name: 'Spearman', cost: 0, maintenance: 0, strength: data.piece_strength?.spearman || 2 },
+                        { type: 'baron', name: 'Baron', cost: 0, maintenance: 0, strength: data.piece_strength?.baron || 3 },
+                        { type: 'knight', name: 'Knight', cost: 0, maintenance: 0, strength: data.piece_strength?.knight || 4 }
+                    ];
+                    
+                    items.forEach(itemData => {
+                        const buildItem = createEditBuildItem(itemData.type, itemData.name, itemData.cost, itemData.maintenance, itemData.strength, true);
+                        buildMenu.appendChild(buildItem);
+                    });
+                })
+                .catch(error => {
+                    console.error('Error fetching province data for edit build menu:', error);
+                    buildMenu.style.display = 'none';
+                });
+        }
+        
+        function createEditBuildItem(pieceType, displayName, cost, maintenance, strength, canAfford = true) {
+            const item = document.createElement('div');
+            item.className = 'build-item-inline';
+            item.style.cssText = `
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                padding: 8px 12px;
+                background: ${canAfford ? 'rgba(255, 255, 255, 0.1)' : 'rgba(100, 100, 100, 0.3)'};
+                border: 2px solid ${canAfford ? 'rgba(255, 255, 255, 0.3)' : 'rgba(150, 150, 150, 0.3)'};
+                border-radius: 6px;
+                cursor: ${canAfford ? 'pointer' : 'not-allowed'};
+                transition: all 0.2s ease;
+                min-width: 80px;
+                opacity: ${canAfford ? '1' : '0.6'};
+            `;
+            
+            item.onmouseenter = function() {
+                if (canAfford) {
+                    this.style.background = 'rgba(255, 255, 255, 0.2)';
+                    this.style.borderColor = 'rgba(255, 255, 255, 0.5)';
+                }
+            };
+            
+            item.onmouseleave = function() {
+                if (canAfford) {
+                    this.style.background = 'rgba(255, 255, 255, 0.1)';
+                    this.style.borderColor = 'rgba(255, 255, 255, 0.3)';
+                }
+            };
+            
+            if (canAfford) {
+                item.onclick = function() {
+                    handleEditBuildPiece(pieceType);
+                };
+            }
+            
+            // Piece name
+            const nameDiv = document.createElement('div');
+            nameDiv.style.cssText = 'color: white; font-weight: bold; font-size: 0.9em; margin-bottom: 4px;';
+            nameDiv.textContent = displayName;
+            item.appendChild(nameDiv);
+
+            // No need to display cost and strength in edit mode
+            
+            return item;
+        }
+        
+        function handleEditBuildPiece(pieceType) {
+            if (!gameBoard || !gameBoard.selectedHexForBuild) {
+                console.warn('No hex selected for building');
+                return;
+            }
+            
+            const hex = gameBoard.selectedHexForBuild;
+            console.log('Edit mode: Building', pieceType, 'on hex', hex);
+            
+            // Get province hex
+            const provinceHex = hex;
+            
+            // Send build command to backend (edit mode - free)
+            const buildData = {
+                coordinate1: hex.coordinate1,
+                coordinate2: hex.coordinate2,
+                piece_type: pieceType,
+                province_coordinate1: provinceHex.coordinate1,
+                province_coordinate2: provinceHex.coordinate2,
+                edit_mode: true  // Flag for edit mode
+            };
+            
+            fetch('/api/unit_tests/build', {
+                method: 'POST',
+                credentials: 'include',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(buildData)
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    console.log('Build successful in edit mode');
+                    // Reload game state to show the change
+                    fetch('/api/unit_tests/state', {
+                        credentials: 'include'
+                    })
+                    .then(response => response.json())
+                    .then(stateData => {
+                        if (stateData.success) {
+                            loadGameState(stateData);
+                            // Clear currentPlayerColor again after reload (in case it was set)
+                            if (gameBoard && editMode) {
+                                gameBoard.currentPlayerColor = null;
+                                gameBoard.render();
+                            }
+                            // Re-populate build menu
+                            populateEditBuildMenu(hex);
+                        }
+                    });
+                } else {
+                    alert('Build failed: ' + (data.error || 'Unknown error'));
+                }
+            })
+            .catch(error => {
+                console.error('Error building in edit mode:', error);
+                alert('Error: ' + error.message);
+            });
+        }
+        
+        function updateEditStatusBar() {
+            // Fetch current state to update status bar
+            fetch('/api/unit_tests/state', {
+                credentials: 'include'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // Update status bar elements
+                    const statusOwnedHex = document.getElementById('editStatusOwnedHex');
+                    if (statusOwnedHex && data.owned_hex_percentage !== undefined) {
+                        statusOwnedHex.textContent = data.owned_hex_percentage.toFixed(1) + '%';
+                    }
+                    
+                    const statusTurn = document.getElementById('editStatusTurn');
+                    if (statusTurn && data.lap !== undefined) {
+                        statusTurn.textContent = (data.lap + 1).toString();
+                    }
+                    
+                    // For edit mode, we can show province info when a hex is selected
+                    // This will be updated when a hex is clicked
+                }
+            })
+            .catch(error => {
+                console.error('Error updating edit status bar:', error);
+            });
+        }
+        
+        function editUndoAction() {
+            // TODO: Implement undo for edit mode
+            console.log('Undo in edit mode (not implemented yet)');
+        }
+        
+        function editEndTurn() {
+            // TODO: Implement end turn for edit mode (if needed)
+            console.log('End turn in edit mode (not implemented yet)');
+        }
+        
+        async function saveMap() {
+            if (!editMode) return;
+            
+            try {
+                console.log('Saving map for test:', currentTestName);
+                const response = await fetch(`/api/unit_tests/save/${encodeURIComponent(currentTestName)}`, {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert('Map saved successfully!');
+                    // Exit edit mode
+                    exitEditMode();
+                    // Reset to show the new base state from the saved map
+                    await resetTest();
+                } else {
+                    alert('Error saving map: ' + (data.error || 'Unknown error'));
+                }
+            } catch (error) {
+                console.error('Error saving map:', error);
+                alert('Error saving map: ' + error.message);
+            }
+        }
+        
+        function exitEditMode() {
+            editMode = false;
+            updateButtonStates();
+            
+            // Remove edit-mode class to hide status/actions bars
+            document.getElementById('testRunnerContainer').classList.remove('edit-mode');
+            
+            // Hide save button
+            const saveBtn = document.getElementById('saveBtn');
+            saveBtn.style.display = 'none';
+            saveBtn.disabled = true;
+            
+            // Hide build menu
+            const buildMenu = document.getElementById('editBuildMenu');
+            if (buildMenu) {
+                buildMenu.style.display = 'none';
+            }
+            
+            // Restore original click handler
+            if (gameBoard && gameBoard._originalHandleClick) {
+                gameBoard.handleClick = gameBoard._originalHandleClick;
+                gameBoard._originalHandleClick = null;
+            }
+            
+            // Clear selection
+            if (gameBoard) {
+                gameBoard.selectedHex = null;
+                gameBoard.selectedHexForBuild = null;
+                gameBoard.render();
             }
         }
     </script>
