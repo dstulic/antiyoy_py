@@ -144,6 +144,11 @@ function updateSoundToggleUI() {
 
 // Initialize game when page loads
 document.addEventListener('DOMContentLoaded', function() {
+    // Skip initialization if we're on the test runner page
+    if (window.location.pathname.startsWith('/unit_tests/run/')) {
+        return;
+    }
+    
     // First, check if there's an existing session (e.g., from a loaded game)
     fetch('/api/game/state')
         .then(response => {

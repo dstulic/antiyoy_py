@@ -23,6 +23,9 @@ ASSETS_ROOT = PROJECT_ROOT.parent / "antiyoy_hd" / "assets"
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)  # For session management
+app.config['PERMANENT_SESSION_LIFETIME'] = 3600  # 1 hour
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 
 # Configure static folders
 app.static_folder = 'static'
@@ -1423,6 +1426,288 @@ def api_game_defense_indicators():
     return jsonify({
         'success': True,
         'defense_indicators': defense_indicators
+    })
+
+
+# Visual test framework endpoints
+@app.route('/unit_tests')
+def unit_tests_page():
+    """Unit tests selection page."""
+    return render_template('unit_tests.html')
+
+
+@app.route('/unit_tests/run/<test_name>')
+def unit_test_runner_page(test_name):
+    """Test runner page for a specific test."""
+    return render_template('unit_test_runner.html', test_name=test_name)
+
+
+@app.route('/api/unit_tests/list')
+def api_unit_tests_list():
+    """Get list of all available visual tests."""
+    try:
+        # Import registry to ensure all tests are registered
+        import tests.visual.registry  # noqa: F401
+        from tests.visual.visual_test_base import VisualTest
+        
+        tests = []
+        for test in VisualTest.get_all_tests():
+            tests.append({
+                'name': test.name,
+                'description': test.description
+            })
+        
+        return jsonify({
+            'success': True,
+            'tests': tests
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/unit_tests/init/<test_name>')
+def api_unit_tests_init(test_name):
+    """Initialize a visual test and return initial state."""
+    print(f"=== INIT ENDPOINT CALLED: {test_name} ===")
+    print(f"Current session ID: {session.get('session_id')}")
+    try:
+        # Import registry to ensure all tests are registered
+        import tests.visual.registry  # noqa: F401
+        from tests.visual.visual_test_base import VisualTest
+        import uuid
+        import copy
+        
+        test = VisualTest.get_test(test_name)
+        if not test:
+            return jsonify({'success': False, 'error': f'Test "{test_name}" not found'}), 404
+        
+        # Set up initial state
+        initial_state = test.setup()
+        
+        # Ensure adjacency graph is built
+        from save_load.decoder import _build_adjacency_graph
+        _build_adjacency_graph(initial_state)
+        
+        # Always create a new session for a test initialization
+        session_id = str(uuid.uuid4())
+        session['session_id'] = session_id
+        session.permanent = True  # Make session persistent
+        session.modified = True  # Force session to be saved
+        
+        # Store initial state and test info
+        # Note: We'll re-run setup() when needed to get fresh state copies
+        game_sessions[session_id] = {
+            'game_state': initial_state,
+            'test_name': test_name,
+            'test_instance': test,
+            'initial_state': initial_state,  # Keep reference to initial state (for serialization)
+            'final_state': None,  # Will be set after test execution
+            'state_mode': 'initial'  # 'initial' or 'final'
+        }
+        
+        cleanup_oldest_session()
+        
+        print(f"Created test session: {session_id} for test: {test_name}")
+        print(f"Session cookie should be set. Session data: {dict(session)}")
+        print(f"Total active sessions: {len(game_sessions)}")
+        
+        # Serialize initial state for frontend
+        response_obj = _serialize_game_state_for_test(initial_state)
+        # _serialize_game_state_for_test returns a Response object, get the JSON
+        json_data = response_obj.get_json()
+        json_data['session_id'] = session_id
+        return jsonify(json_data)
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/unit_tests/run/<test_name>')
+def api_unit_tests_run(test_name):
+    """Run a visual test and return final state."""
+    try:
+        session_id = session.get('session_id')
+        print(f"=== RUN TEST ENDPOINT ===")
+        print(f"Run test - Session ID from cookie: {session_id}")
+        print(f"Run test - Session data: {dict(session)}")
+        print(f"Run test - Available sessions: {list(game_sessions.keys())}")
+        if not session_id or session_id not in game_sessions:
+            # Try to find session by test name as fallback
+            for sid, data in game_sessions.items():
+                if data.get('test_name') == test_name:
+                    print(f"Found session by test name: {sid}")
+                    session['session_id'] = sid
+                    session_id = sid
+                    session.modified = True
+                    break
+            if not session_id or session_id not in game_sessions:
+                return jsonify({'success': False, 'error': f'No active test session. Session ID: {session_id}'}), 404
+        
+        session_data = game_sessions[session_id]
+        if session_data.get('test_name') != test_name:
+            return jsonify({'success': False, 'error': 'Test name mismatch'}), 400
+        
+        test = session_data.get('test_instance')
+        initial_state = session_data.get('initial_state')
+        
+        if not test or not initial_state:
+            return jsonify({'success': False, 'error': 'Test not properly initialized'}), 500
+        
+        # Create a copy of initial state for running the test
+        # We need to re-run setup to get a fresh state, since run() modifies the state
+        # Alternatively, we could serialize/deserialize, but re-running setup is simpler
+        fresh_state = test.setup()
+        from save_load.decoder import _build_adjacency_graph
+        _build_adjacency_graph(fresh_state)
+        
+        # Run the test (this modifies the game state)
+        final_state = test.run(fresh_state)
+        
+        # Store final state
+        session_data['final_state'] = final_state
+        session_data['state_mode'] = 'final'
+        session_data['game_state'] = final_state
+        
+        # Serialize final state for frontend
+        return _serialize_game_state_for_test(final_state)
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/unit_tests/reset')
+def api_unit_tests_reset():
+    """Reset test view to initial state."""
+    try:
+        session_id = session.get('session_id')
+        print(f"=== RESET TEST ENDPOINT ===")
+        print(f"Reset test - Session ID from cookie: {session_id}")
+        print(f"Reset test - Session data: {dict(session)}")
+        print(f"Reset test - Available sessions: {list(game_sessions.keys())}")
+        if not session_id or session_id not in game_sessions:
+            # Try to find the most recent session as fallback
+            if game_sessions:
+                # Get the last session (most recently added)
+                session_id = list(game_sessions.keys())[-1]
+                print(f"Using most recent session as fallback: {session_id}")
+                session['session_id'] = session_id
+                session.modified = True
+            else:
+                return jsonify({'success': False, 'error': f'No active test session. Session ID: {session_id}'}), 404
+        
+        session_data = game_sessions[session_id]
+        test = session_data.get('test_instance')
+        
+        if not test:
+            return jsonify({'success': False, 'error': 'Test instance not available'}), 500
+        
+        # Re-run setup to get a fresh initial state
+        fresh_initial_state = test.setup()
+        from save_load.decoder import _build_adjacency_graph
+        _build_adjacency_graph(fresh_initial_state)
+        
+        # Update stored initial state reference
+        session_data['initial_state'] = fresh_initial_state
+        session_data['state_mode'] = 'initial'
+        session_data['game_state'] = fresh_initial_state
+        
+        # Serialize initial state for frontend
+        return _serialize_game_state_for_test(fresh_initial_state)
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/unit_tests/state')
+def api_unit_tests_state():
+    """Get current test state (initial or final)."""
+    try:
+        session_id = session.get('session_id')
+        if not session_id or session_id not in game_sessions:
+            return jsonify({'success': False, 'error': 'No active test session'}), 404
+        
+        session_data = game_sessions[session_id]
+        current_state = session_data.get('game_state')
+        state_mode = session_data.get('state_mode', 'initial')
+        test_name = session_data.get('test_name', '')
+        
+        if not current_state:
+            return jsonify({'success': False, 'error': 'Game state not available'}), 500
+        
+        # Serialize current state
+        result = _serialize_game_state_for_test(current_state)
+        # Add metadata
+        if isinstance(result, tuple):
+            response_data = result[0].get_json()
+            response_data['state_mode'] = state_mode
+            response_data['test_name'] = test_name
+            return jsonify(response_data)
+        else:
+            return result
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+def _serialize_game_state_for_test(game_state):
+    """Serialize game state for visual test display."""
+    # Get all hexes (no fog of war for tests)
+    hexes = []
+    for hex in game_state.hexes:
+        hex_data = {
+            'coordinate1': hex.coordinate1,
+            'coordinate2': hex.coordinate2,
+            'color': hex.color.value if hasattr(hex.color, 'value') else str(hex.color),
+            'piece': hex.piece.value if hex.piece and hasattr(hex.piece, 'value') else None,
+            'unit_id': hex.unit_id,
+            'is_ready': False  # Tests don't need readiness info
+        }
+        hexes.append(hex_data)
+    
+    # Serialize player entities
+    entities = []
+    if hasattr(game_state, 'entities_manager') and game_state.entities_manager:
+        if hasattr(game_state.entities_manager, 'entities') and game_state.entities_manager.entities:
+            for entity in game_state.entities_manager.entities:
+                entity_data = {
+                    'type': entity.type.value if hasattr(entity.type, 'value') else str(entity.type),
+                    'color': entity.color.value if hasattr(entity.color, 'value') else str(entity.color),
+                    'name': entity.name
+                }
+                entities.append(entity_data)
+    
+    # Get current turn info
+    current_color_value = None
+    if hasattr(game_state, 'entities_manager') and game_state.entities_manager:
+        current_entity = game_state.entities_manager.get_current_entity()
+        if current_entity:
+            current_color_value = current_entity.color.value if hasattr(current_entity.color, 'value') else str(current_entity.color)
+    
+    # Get turn info
+    turn_index = 0
+    lap = 0
+    if hasattr(game_state, 'turns_manager') and game_state.turns_manager:
+        turn_index = game_state.turns_manager.turn_index
+        lap = game_state.turns_manager.lap
+    
+    return jsonify({
+        'success': True,
+        'hexes': hexes,
+        'entities': entities,
+        'current_color': current_color_value,
+        'turn_index': turn_index,
+        'lap': lap,
+        'owned_hex_percentage': 0.0,  # Not needed for tests
+        'event_history': [],  # Tests don't need event history
+        'event_history_encoded': ""
     })
 
 

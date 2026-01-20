@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Runner - {{ test_name }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+    <style>
+        .test-runner-container {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+        .test-controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 20px;
+            background: #2d3748;
+            border-bottom: 2px solid #4a5568;
+            flex-shrink: 0;
+        }
+        .test-controls button {
+            padding: 8px 16px;
+            background: #4a5568;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        .test-controls button:hover:not(:disabled) {
+            background: #63b3ed;
+        }
+        .test-controls button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .test-name-label {
+            flex: 1;
+            color: #e2e8f0;
+            font-size: 16px;
+            font-weight: bold;
+            text-align: center;
+        }
+        .game-container {
+            flex: 1;
+            overflow: hidden;
+            position: relative;
+        }
+    </style>
+</head>
+<body>
+    <div class="test-runner-container">
+        <div class="test-controls">
+            <button id="homeBtn" onclick="goHome()">Home</button>
+            <button id="backBtn" onclick="goBack()" disabled>← Back</button>
+            <button id="resetBtn" onclick="resetTest()">Reset</button>
+            <button id="playBtn" onclick="runTest()">Play</button>
+            <button id="forwardBtn" onclick="goForward()" disabled>Forward →</button>
+            <div class="test-name-label" id="testNameLabel">{{ test_name }}</div>
+        </div>
+        <div class="game-container">
+            <div id="testGameBoard" class="game-board"></div>
+        </div>
+    </div>
+    
+    <script src="{{ url_for('static', filename='js/hex_grid.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/animations.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/game_board.js') }}"></script>
+    <script>
+        // Utility functions needed by game_board.js
+        // These are normally defined in game.js, but we don't load that file for test runner
+        function isUnitPiece(piece) {
+            if (!piece) return false;
+            // Piece values come from the backend as enum values (e.g., 'PEASANT', 'SPEARMAN')
+            // The original game.js checks for lowercase, but backend sends uppercase enum values
+            const pieceStr = String(piece).toLowerCase();
+            return pieceStr === 'peasant' || pieceStr === 'spearman' || 
+                   pieceStr === 'baron' || pieceStr === 'knight';
+        }
+    </script>
+    <script>
+        let currentTestName = '{{ test_name }}';
+        let allTests = [];
+        let currentTestIndex = -1;
+        let gameBoard = null;
+        let stateMode = 'initial'; // 'initial' or 'final'
+        
+        // Initialize game board
+        window.addEventListener('load', () => {
+            // Initialize game board with container ID
+            gameBoard = new GameBoard('testGameBoard', 30, 1.0);
+            
+            // Load test list to enable navigation
+            loadTestList().then(() => {
+                // Initialize current test
+                initTest();
+            });
+        });
+        
+        async function loadTestList() {
+            try {
+                const response = await fetch('/api/unit_tests/list', {
+                    credentials: 'include'
+                });
+                const data = await response.json();
+                if (data.success) {
+                    allTests = data.tests.map(t => t.name);
+                    currentTestIndex = allTests.indexOf(currentTestName);
+                    updateNavigationButtons();
+                }
+            } catch (error) {
+                console.error('Error loading test list:', error);
+            }
+        }
+        
+        function updateNavigationButtons() {
+            const backBtn = document.getElementById('backBtn');
+            const forwardBtn = document.getElementById('forwardBtn');
+            
+            backBtn.disabled = currentTestIndex <= 0;
+            forwardBtn.disabled = currentTestIndex >= allTests.length - 1;
+        }
+        
+        async function initTest() {
+            try {
+                console.log('Initializing test:', currentTestName);
+                const response = await fetch(`/api/unit_tests/init/${encodeURIComponent(currentTestName)}`, {
+                    credentials: 'include'
+                });
+                const data = await response.json();
+                
+                console.log('Init response:', data);
+                console.log('Session ID from response:', data.session_id);
+                
+                if (data.success) {
+                    stateMode = 'initial';
+                    console.log('Loading game state with', data.hexes?.length || 0, 'hexes');
+                    loadGameState(data);
+                } else {
+                    console.error('Init failed:', data.error);
+                    alert('Error initializing test: ' + (data.error || 'Unknown error'));
+                }
+            } catch (error) {
+                console.error('Error initializing test:', error);
+                alert('Error initializing test: ' + error.message);
+            }
+        }
+        
+        async function resetTest() {
+            try {
+                const response = await fetch('/api/unit_tests/reset', {
+                    credentials: 'include'
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    stateMode = 'initial';
+                    loadGameState(data);
+                } else {
+                    alert('Error resetting test: ' + (data.error || 'Unknown error'));
+                }
+            } catch (error) {
+                alert('Error resetting test: ' + error.message);
+            }
+        }
+        
+        async function runTest() {
+            try {
+                const response = await fetch(`/api/unit_tests/run/${encodeURIComponent(currentTestName)}`, {
+                    credentials: 'include'
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    stateMode = 'final';
+                    loadGameState(data);
+                } else {
+                    alert('Error running test: ' + (data.error || 'Unknown error'));
+                }
+            } catch (error) {
+                alert('Error running test: ' + error.message);
+            }
+        }
+        
+        function loadGameState(data) {
+            console.log('loadGameState called with', data.hexes?.length || 0, 'hexes');
+            if (data.hexes && gameBoard) {
+                console.log('Setting hexes on game board');
+                gameBoard.setHexes(data.hexes);
+                if (data.current_color) {
+                    gameBoard.setCurrentPlayerColor(data.current_color);
+                }
+                // Resize canvas to fit container
+                gameBoard.resize();
+                // Render the board
+                gameBoard.render();
+                console.log('Game state loaded and rendered');
+            } else {
+                console.warn('Cannot load game state:', {
+                    hasHexes: !!data.hexes,
+                    hasGameBoard: !!gameBoard,
+                    hexCount: data.hexes?.length || 0
+                });
+            }
+        }
+        
+        function goHome() {
+            window.location.href = '/unit_tests';
+        }
+        
+        function goBack() {
+            if (currentTestIndex > 0) {
+                const prevTest = allTests[currentTestIndex - 1];
+                window.location.href = `/unit_tests/run/${encodeURIComponent(prevTest)}`;
+            }
+        }
+        
+        function goForward() {
+            if (currentTestIndex < allTests.length - 1) {
+                const nextTest = allTests[currentTestIndex + 1];
+                window.location.href = `/unit_tests/run/${encodeURIComponent(nextTest)}`;
+            }
+        }
+    </script>
+</body>
+</html>

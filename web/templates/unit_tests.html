@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visual Unit Tests - Antiyoy</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+    <style>
+        .unit-tests-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .unit-tests-header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .unit-tests-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+        }
+        .test-card {
+            border: 2px solid #4a5568;
+            border-radius: 8px;
+            padding: 20px;
+            background: #2d3748;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .test-card:hover {
+            border-color: #63b3ed;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(99, 179, 237, 0.3);
+        }
+        .test-card h3 {
+            margin: 0 0 10px 0;
+            color: #e2e8f0;
+        }
+        .test-card p {
+            margin: 0;
+            color: #a0aec0;
+            font-size: 14px;
+        }
+        .back-button {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            padding: 10px 20px;
+            background: #4a5568;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        .back-button:hover {
+            background: #63b3ed;
+        }
+    </style>
+</head>
+<body>
+    <button class="back-button" onclick="window.location.href='/'">← Home</button>
+    <div class="unit-tests-container">
+        <div class="unit-tests-header">
+            <h1>Visual Unit Tests</h1>
+            <p>Select a test to run and visualize</p>
+        </div>
+        <div id="testsList" class="unit-tests-list">
+            <p>Loading tests...</p>
+        </div>
+    </div>
+    
+    <script>
+        async function loadTests() {
+            try {
+                const response = await fetch('/api/unit_tests/list');
+                const data = await response.json();
+                
+                if (data.success) {
+                    const testsList = document.getElementById('testsList');
+                    testsList.innerHTML = '';
+                    
+                    if (data.tests.length === 0) {
+                        testsList.innerHTML = '<p>No tests available</p>';
+                        return;
+                    }
+                    
+                    data.tests.forEach(test => {
+                        const card = document.createElement('div');
+                        card.className = 'test-card';
+                        card.onclick = () => {
+                            window.location.href = `/unit_tests/run/${encodeURIComponent(test.name)}`;
+                        };
+                        card.innerHTML = `
+                            <h3>${escapeHtml(test.name)}</h3>
+                            <p>${escapeHtml(test.description || 'No description')}</p>
+                        `;
+                        testsList.appendChild(card);
+                    });
+                } else {
+                    document.getElementById('testsList').innerHTML = 
+                        `<p>Error loading tests: ${escapeHtml(data.error || 'Unknown error')}</p>`;
+                }
+            } catch (error) {
+                document.getElementById('testsList').innerHTML = 
+                    `<p>Error loading tests: ${escapeHtml(error.message)}</p>`;
+            }
+        }
+        
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        // Load tests on page load
+        loadTests();
+    </script>
+</body>
+</html>
