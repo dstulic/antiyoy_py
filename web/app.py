@@ -1481,12 +1481,37 @@ def api_unit_tests_init(test_name):
         if not test:
             return jsonify({'success': False, 'error': f'Test "{test_name}" not found'}), 404
         
+        # Use the test's actual name to ensure consistency
+        actual_test_name = test.name
+        
+        # Check if current session cookie points to a different test
+        old_session_id = session.get('session_id')
+        if old_session_id and old_session_id in game_sessions:
+            old_session_data = game_sessions[old_session_id]
+            old_test_name = old_session_data.get('test_name')
+            if old_test_name != actual_test_name:
+                print(f"Current session cookie points to different test: {old_test_name} != {actual_test_name}. Clearing old session.")
+                # Remove the old session since it's for a different test
+                del game_sessions[old_session_id]
+                # Clear the session cookie
+                session.pop('session_id', None)
+        
         # Set up initial state
         initial_state = test.setup()
         
         # Ensure adjacency graph is built
         from save_load.decoder import _build_adjacency_graph
         _build_adjacency_graph(initial_state)
+        
+        # Clear any old sessions for this test to avoid conflicts
+        # (in case user navigated from another test)
+        old_sessions_to_remove = []
+        for sid, data in game_sessions.items():
+            if data.get('test_name') == actual_test_name:
+                old_sessions_to_remove.append(sid)
+        for sid in old_sessions_to_remove:
+            del game_sessions[sid]
+            print(f"Removed old session for test: {sid}")
         
         # Always create a new session for a test initialization
         session_id = str(uuid.uuid4())
@@ -1496,9 +1521,10 @@ def api_unit_tests_init(test_name):
         
         # Store initial state and test info
         # Note: We'll re-run setup() when needed to get fresh state copies
+        # Use actual_test_name to ensure consistency with test.name
         game_sessions[session_id] = {
             'game_state': initial_state,
-            'test_name': test_name,
+            'test_name': actual_test_name,  # Use test's actual name for consistency
             'test_instance': test,
             'initial_state': initial_state,  # Keep reference to initial state (for serialization)
             'final_state': None,  # Will be set after test execution
@@ -1533,21 +1559,33 @@ def api_unit_tests_run(test_name):
         print(f"Run test - Session ID from cookie: {session_id}")
         print(f"Run test - Session data: {dict(session)}")
         print(f"Run test - Available sessions: {list(game_sessions.keys())}")
+        
+        # Normalize test name first
+        from tests.visual.visual_test_base import VisualTest
+        test_from_url = VisualTest.get_test(test_name)
+        if not test_from_url:
+            return jsonify({'success': False, 'error': f'Test "{test_name}" not found'}), 404
+        normalized_test_name = test_from_url.name
+        
         if not session_id or session_id not in game_sessions:
-            # Try to find session by test name as fallback
+            # Try to find session by normalized test name as fallback
             for sid, data in game_sessions.items():
-                if data.get('test_name') == test_name:
+                stored_name = data.get('test_name')
+                if stored_name == normalized_test_name:
                     print(f"Found session by test name: {sid}")
                     session['session_id'] = sid
                     session_id = sid
                     session.modified = True
                     break
             if not session_id or session_id not in game_sessions:
-                return jsonify({'success': False, 'error': f'No active test session. Session ID: {session_id}'}), 404
+                return jsonify({'success': False, 'error': f'No active test session for "{normalized_test_name}". Please initialize the test first.'}), 404
         
         session_data = game_sessions[session_id]
-        if session_data.get('test_name') != test_name:
-            return jsonify({'success': False, 'error': 'Test name mismatch'}), 400
+        stored_test_name = session_data.get('test_name')
+        
+        # Check if stored test name matches the requested test name (normalized)
+        if stored_test_name != normalized_test_name:
+            return jsonify({'success': False, 'error': f'Session is for a different test. Stored="{stored_test_name}", requested="{normalized_test_name}". Please navigate to the test and click "Reset" to re-initialize.'}), 400
         
         test = session_data.get('test_instance')
         initial_state = session_data.get('initial_state')
@@ -1580,27 +1618,79 @@ def api_unit_tests_run(test_name):
 
 
 @app.route('/api/unit_tests/reset')
-def api_unit_tests_reset():
+@app.route('/api/unit_tests/reset/<test_name>')
+def api_unit_tests_reset(test_name=None):
     """Reset test view to initial state."""
     try:
+        from tests.visual.visual_test_base import VisualTest
+        import uuid
+        
+        # If test_name is provided, normalize it
+        normalized_test_name = None
+        if test_name:
+            test_from_url = VisualTest.get_test(test_name)
+            if test_from_url:
+                normalized_test_name = test_from_url.name
+        
         session_id = session.get('session_id')
         print(f"=== RESET TEST ENDPOINT ===")
         print(f"Reset test - Session ID from cookie: {session_id}")
+        print(f"Reset test - Requested test name: {test_name}")
+        print(f"Reset test - Normalized test name: {normalized_test_name}")
         print(f"Reset test - Session data: {dict(session)}")
         print(f"Reset test - Available sessions: {list(game_sessions.keys())}")
-        if not session_id or session_id not in game_sessions:
-            # Try to find the most recent session as fallback
-            if game_sessions:
-                # Get the last session (most recently added)
-                session_id = list(game_sessions.keys())[-1]
-                print(f"Using most recent session as fallback: {session_id}")
-                session['session_id'] = session_id
-                session.modified = True
-            else:
-                return jsonify({'success': False, 'error': f'No active test session. Session ID: {session_id}'}), 404
         
-        session_data = game_sessions[session_id]
-        test = session_data.get('test_instance')
+        # Check if we have a valid session for the requested test
+        session_data = None
+        if session_id and session_id in game_sessions:
+            session_data = game_sessions[session_id]
+            stored_test_name = session_data.get('test_name')
+            
+            # If test_name was provided and doesn't match, we need to create a new session
+            if normalized_test_name and stored_test_name != normalized_test_name:
+                print(f"Session mismatch: stored={stored_test_name}, requested={normalized_test_name}. Creating new session.")
+                session_data = None  # Force creation of new session
+            elif normalized_test_name and stored_test_name == normalized_test_name:
+                # Session matches, use it
+                test = session_data.get('test_instance')
+            else:
+                # No test_name provided, use existing session
+                test = session_data.get('test_instance')
+        else:
+            # No valid session, try to find one by test name
+            if normalized_test_name:
+                for sid, data in game_sessions.items():
+                    if data.get('test_name') == normalized_test_name:
+                        session_id = sid
+                        session['session_id'] = sid
+                        session.modified = True
+                        session_data = data
+                        test = data.get('test_instance')
+                        break
+        
+        # If we still don't have a valid session/test, create a new one
+        if not session_data or not session_data.get('test_instance'):
+            if not normalized_test_name:
+                return jsonify({'success': False, 'error': 'No test name provided and no valid session found'}), 400
+            
+            print(f"Creating new session for test: {normalized_test_name}")
+            test = VisualTest.get_test(normalized_test_name)
+            if not test:
+                return jsonify({'success': False, 'error': f'Test "{normalized_test_name}" not found'}), 404
+            
+            # Create new session
+            session_id = str(uuid.uuid4())
+            session['session_id'] = session_id
+            session.permanent = True
+            session.modified = True
+            
+            # Clear any old sessions for this test
+            old_sessions_to_remove = []
+            for sid, data in game_sessions.items():
+                if data.get('test_name') == normalized_test_name:
+                    old_sessions_to_remove.append(sid)
+            for sid in old_sessions_to_remove:
+                del game_sessions[sid]
         
         if not test:
             return jsonify({'success': False, 'error': 'Test instance not available'}), 500
@@ -1610,10 +1700,26 @@ def api_unit_tests_reset():
         from save_load.decoder import _build_adjacency_graph
         _build_adjacency_graph(fresh_initial_state)
         
-        # Update stored initial state reference
-        session_data['initial_state'] = fresh_initial_state
-        session_data['state_mode'] = 'initial'
-        session_data['game_state'] = fresh_initial_state
+        # Update or create session with fresh initial state
+        if session_id not in game_sessions:
+            # Create new session entry
+            game_sessions[session_id] = {
+                'game_state': fresh_initial_state,
+                'test_name': test.name,
+                'test_instance': test,
+                'initial_state': fresh_initial_state,
+                'final_state': None,
+                'state_mode': 'initial'
+            }
+        else:
+            # Update existing session
+            session_data = game_sessions[session_id]
+            session_data['game_state'] = fresh_initial_state
+            session_data['initial_state'] = fresh_initial_state
+            session_data['final_state'] = None
+            session_data['state_mode'] = 'initial'
+            session_data['test_name'] = test.name  # Update test name in case it changed
+            session_data['test_instance'] = test
         
         # Serialize initial state for frontend
         return _serialize_game_state_for_test(fresh_initial_state)
@@ -1666,21 +1772,32 @@ def api_unit_tests_save(test_name):
         print(f"Save map - Session ID from cookie: {session_id}")
         print(f"Save map - Available sessions: {list(game_sessions.keys())}")
         
+        # Normalize test name first
+        from tests.visual.visual_test_base import VisualTest
+        test_from_url = VisualTest.get_test(test_name)
+        if not test_from_url:
+            return jsonify({'success': False, 'error': f'Test "{test_name}" not found'}), 404
+        normalized_test_name = test_from_url.name
+        
         if not session_id or session_id not in game_sessions:
-            # Try to find session by test name as fallback
+            # Try to find session by normalized test name as fallback
             for sid, data in game_sessions.items():
-                if data.get('test_name') == test_name:
+                stored_name = data.get('test_name')
+                if stored_name == normalized_test_name:
                     print(f"Found session by test name: {sid}")
                     session['session_id'] = sid
                     session_id = sid
                     session.modified = True
                     break
             if not session_id or session_id not in game_sessions:
-                return jsonify({'success': False, 'error': f'No active test session. Session ID: {session_id}'}), 404
+                return jsonify({'success': False, 'error': f'No active test session for "{normalized_test_name}". Please initialize the test first.'}), 404
         
         session_data = game_sessions[session_id]
-        if session_data.get('test_name') != test_name:
-            return jsonify({'success': False, 'error': 'Test name mismatch'}), 400
+        stored_test_name = session_data.get('test_name')
+        
+        # Check if stored test name matches the requested test name (normalized)
+        if stored_test_name != normalized_test_name:
+            return jsonify({'success': False, 'error': f'Session is for a different test. Stored="{stored_test_name}", requested="{normalized_test_name}". Please navigate to the test and click "Reset" to re-initialize.'}), 400
         
         test = session_data.get('test_instance')
         # Save the current game state (which should be the initial state after reset in edit mode)
