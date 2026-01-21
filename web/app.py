@@ -1896,7 +1896,7 @@ def api_unit_tests_build():
             return jsonify({'success': False, 'error': 'piece_type is required'}), 400
         
         # Convert piece type string to enum
-        from core.enums import PieceType
+        from core.enums import PieceType, EventType
         try:
             piece_type = PieceType(piece_type_str.lower())
         except ValueError:
@@ -1947,6 +1947,23 @@ def api_unit_tests_build():
             original_money = province.get_money()
             province.set_money(999999)
         
+        # If building a city, remove any existing cities from the province first
+        # (provinces can only have one city)
+        if piece_type == PieceType.CITY:
+            city_hexes = [hex for hex in province.get_hexes() if hex.piece == PieceType.CITY]
+            # Remove all existing cities except the one we're building on (if it's already a city)
+            for city_hex in city_hexes:
+                if city_hex != hex_obj:  # Don't remove the hex we're building on
+                    # Delete the existing city
+                    delete_event = game_state.events_manager.factory.create_event(EventType.PIECE_DELETE)
+                    from core.events import EventPieceDelete
+                    if isinstance(delete_event, EventPieceDelete):
+                        delete_event.set_hex(city_hex)
+                        try:
+                            game_state.events_manager.apply_event(delete_event)
+                        except Exception as e:
+                            print(f"Warning: Failed to remove existing city: {e}")
+        
         try:
             # In edit mode, directly call the executor's internal method to bypass all validation
             # This skips ownership checks, turn checks, and cost checks
@@ -1975,6 +1992,149 @@ def api_unit_tests_build():
             print(f"  Hex has piece: {hex_obj.piece}")
             print(f"  Province: {province}")
             return jsonify({'success': False, 'error': error or 'Build failed'}), 400
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/unit_tests/build_land', methods=['POST'])
+def api_unit_tests_build_land():
+    """Build/change land in edit mode (black hex, gray hex, or color hex)."""
+    try:
+        session_id = session.get('session_id')
+        if not session_id or session_id not in game_sessions:
+            # Try to find session by test name as fallback
+            for sid, data in game_sessions.items():
+                if data.get('test_name'):
+                    session['session_id'] = sid
+                    session_id = sid
+                    session.modified = True
+                    break
+            if not session_id or session_id not in game_sessions:
+                return jsonify({'success': False, 'error': 'No active test session'}), 404
+        
+        session_data = game_sessions[session_id]
+        game_state = session_data.get('game_state')
+        
+        if not game_state:
+            return jsonify({'success': False, 'error': 'Game state not available'}), 500
+        
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'No data provided'}), 400
+        
+        # Get parameters
+        try:
+            coordinate1 = int(data.get('coordinate1'))
+            coordinate2 = int(data.get('coordinate2'))
+            color_str = data.get('color')
+        except (ValueError, TypeError) as e:
+            return jsonify({'success': False, 'error': f'Invalid parameters: {e}'}), 400
+        
+        if not color_str:
+            return jsonify({'success': False, 'error': 'color is required'}), 400
+        
+        # Get the hex
+        hex_obj = game_state.get_hex(coordinate1, coordinate2)
+        is_black_hex = (hex_obj is None)  # Black hexes don't exist in game_state.hexes
+        
+        from core.enums import HColor, EventType
+        
+        if color_str == 'black':
+            # Remove hex from game state (make it black)
+            if not hex_obj:
+                return jsonify({'success': False, 'error': 'Hex not found'}), 404
+            
+            # Remove piece if any
+            if hex_obj.piece:
+                delete_event = game_state.events_manager.factory.create_event(EventType.PIECE_DELETE)
+                from core.events import EventPieceDelete
+                if isinstance(delete_event, EventPieceDelete):
+                    delete_event.set_hex(hex_obj)
+                    game_state.events_manager.apply_event(delete_event)
+            
+            # Remove hex from game state
+            if hex_obj in game_state.hexes:
+                game_state.hexes.remove(hex_obj)
+                # Remove from adjacency lists
+                for adj_hex in hex_obj.adjacent_hexes[:]:
+                    if adj_hex in adj_hex.adjacent_hexes:
+                        adj_hex.adjacent_hexes.remove(hex_obj)
+                    hex_obj.adjacent_hexes.remove(adj_hex)
+            
+        elif color_str == 'gray':
+            # Make hex gray (neutral)
+            if is_black_hex:
+                # Add hex to game state as gray
+                from core.hex import Hex
+                hex_obj = Hex(coordinate1, coordinate2, HColor.GRAY)
+                game_state.hexes.append(hex_obj)
+                # Rebuild adjacency graph
+                from save_load.decoder import _build_adjacency_graph
+                _build_adjacency_graph(game_state)
+            else:
+                # Change existing hex to gray
+                previous_color = hex_obj.color
+                change_color_event = game_state.events_manager.factory.create_event(EventType.HEX_CHANGE_COLOR)
+                from core.events import EventHexChangeColor
+                if isinstance(change_color_event, EventHexChangeColor):
+                    change_color_event.set_hex(hex_obj)
+                    change_color_event.set_color(HColor.GRAY)
+                    # Store previous color for province manager
+                    game_state.provinces_manager._previous_color = previous_color
+                    game_state.events_manager.apply_event(change_color_event)
+        
+        else:
+            # Change hex to a player color
+            try:
+                target_color = HColor(color_str.lower())
+            except ValueError:
+                return jsonify({'success': False, 'error': f'Invalid color: {color_str}'}), 400
+            
+            if is_black_hex:
+                # Add hex to game state with target color
+                from core.hex import Hex
+                hex_obj = Hex(coordinate1, coordinate2, target_color)
+                game_state.hexes.append(hex_obj)
+                # Rebuild adjacency graph
+                from save_load.decoder import _build_adjacency_graph
+                _build_adjacency_graph(game_state)
+                # Add to province
+                game_state.provinces_manager._enlarge_province_for_hex(hex_obj)
+            else:
+                # Change existing hex color
+                previous_color = hex_obj.color
+                if previous_color == target_color:
+                    return jsonify({'success': True, 'message': 'Hex already has this color'})
+                
+                # Check if hex has neighbor of target color
+                has_target_color_neighbor = False
+                for adj_hex in hex_obj.adjacent_hexes:
+                    if adj_hex.color == target_color:
+                        has_target_color_neighbor = True
+                        break
+                
+                if not has_target_color_neighbor:
+                    return jsonify({'success': False, 'error': 'Hex must be adjacent to a hex of the target color'}), 400
+                
+                change_color_event = game_state.events_manager.factory.create_event(EventType.HEX_CHANGE_COLOR)
+                from core.events import EventHexChangeColor
+                if isinstance(change_color_event, EventHexChangeColor):
+                    change_color_event.set_hex(hex_obj)
+                    change_color_event.set_color(target_color)
+                    # Store previous color for province manager
+                    game_state.provinces_manager._previous_color = previous_color
+                    game_state.events_manager.apply_event(change_color_event)
+        
+        # Update session state
+        session_data['game_state'] = game_state
+        
+        return jsonify({
+            'success': True,
+            'message': f'Land changed to {color_str} successfully'
+        })
         
     except Exception as e:
         import traceback
