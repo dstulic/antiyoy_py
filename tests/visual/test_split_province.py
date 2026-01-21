@@ -14,6 +14,8 @@ def _run_split_test(
     color2: HColor,
     hex_x: int,
     hex_y: int,
+    city_x: int,
+    city_y: int,
     test_name: str
 ) -> GameState:
     """
@@ -25,6 +27,8 @@ def _run_split_test(
         color2: The color that will build the spearman
         hex_x: X coordinate of hex to build on
         hex_y: Y coordinate of hex to build on
+        city_x: X coordinate where city should be placed after split
+        city_y: Y coordinate where city should be placed after split
         test_name: Name of the test (for error messages)
     
     Returns:
@@ -39,6 +43,11 @@ def _run_split_test(
     hex_target = game_state.get_hex(hex_x, hex_y)
     assert hex_target is not None, f"[{test_name}] Hex ({hex_x},{hex_y}) should exist"
     assert hex_target.color == color1, f"[{test_name}] Hex ({hex_x},{hex_y}) should be {color1.value} initially to test the split, got {hex_target.color.value}"
+    
+    # Step 1 (continued): Verify that there is NO city at the expected city location
+    city_hex = game_state.get_hex(city_x, city_y)
+    assert city_hex is not None, f"[{test_name}] Hex ({city_x},{city_y}) should exist for city verification"
+    assert city_hex.piece != PieceType.CITY, f"[{test_name}] Hex ({city_x},{city_y}) should NOT have a city initially, but it does"
     
     # Step 2: Make it color2 player's turn
     # Find color2 entity index
@@ -96,6 +105,11 @@ def _run_split_test(
     assert hex_after.color == color2, f"[{test_name}] Hex ({hex_x},{hex_y}) should be {color2.value} after build, got {hex_after.color.value}"
     assert hex_after.piece == PieceType.SPEARMAN, f"[{test_name}] Hex ({hex_x},{hex_y}) should have spearman, got {hex_after.piece}"
     
+    # Step 5 (continued): Verify that there IS a city at the expected city location
+    city_hex_after = game_state.get_hex(city_x, city_y)
+    assert city_hex_after is not None, f"[{test_name}] Hex ({city_x},{city_y}) should still exist for city verification"
+    assert city_hex_after.piece == PieceType.CITY, f"[{test_name}] Hex ({city_x},{city_y}) should have a city after split, but got {city_hex_after.piece}"
+    
     return game_state
 
 
@@ -122,7 +136,7 @@ class SplitProvinceTestA(VisualTest):
     
     def run(self, game_state: GameState) -> GameState:
         """Run test A: red split by aqua at (2,0)."""
-        return _run_split_test(game_state, HColor.RED, HColor.AQUA, 2, 0, "Test A")
+        return _run_split_test(game_state, HColor.RED, HColor.AQUA, 2, 0, 6, 0, "Test A")
 
 
 @visual_test("split province test B", "Test B: red split by aqua at (2,-2)")
@@ -145,7 +159,7 @@ class SplitProvinceTestB(VisualTest):
     
     def run(self, game_state: GameState) -> GameState:
         """Run test B: red split by aqua at (2,-2)."""
-        return _run_split_test(game_state, HColor.RED, HColor.AQUA, 2, -2, "Test B")
+        return _run_split_test(game_state, HColor.RED, HColor.AQUA, 2, -2, 4, -4, "Test B")
 
 
 @visual_test("split province test C", "Test C: aqua split by red at (1,-1)")
@@ -168,7 +182,7 @@ class SplitProvinceTestC(VisualTest):
     
     def run(self, game_state: GameState) -> GameState:
         """Run test C: aqua split by red at (1,-1)."""
-        return _run_split_test(game_state, HColor.AQUA, HColor.RED, 1, -1, "Test C")
+        return _run_split_test(game_state, HColor.AQUA, HColor.RED, 1, -1, 1, 4, "Test C")
 
 
 @visual_test("split province test D", "Test D: aqua split by lavender at (1,-3)")
@@ -191,7 +205,7 @@ class SplitProvinceTestD(VisualTest):
     
     def run(self, game_state: GameState) -> GameState:
         """Run test D: aqua split by lavender at (1,-3)."""
-        return _run_split_test(game_state, HColor.AQUA, HColor.LAVENDER, 1, -3, "Test D")
+        return _run_split_test(game_state, HColor.AQUA, HColor.LAVENDER, 1, -3, -4, -5, "Test D")
 
 
 @visual_test("split province test E", "Test E: lavender split by aqua at (0,0)")
@@ -214,7 +228,7 @@ class SplitProvinceTestE(VisualTest):
     
     def run(self, game_state: GameState) -> GameState:
         """Run test E: lavender split by aqua at (0,0)."""
-        return _run_split_test(game_state, HColor.LAVENDER, HColor.AQUA, 0, 0, "Test E")
+        return _run_split_test(game_state, HColor.LAVENDER, HColor.AQUA, 0, 0, -1, -1, "Test E")
 
 
 @visual_test("split province test F", "Test F: lavender split by aqua at (0,2)")
@@ -237,7 +251,7 @@ class SplitProvinceTestF(VisualTest):
     
     def run(self, game_state: GameState) -> GameState:
         """Run test F: lavender split by aqua at (0,2)."""
-        return _run_split_test(game_state, HColor.LAVENDER, HColor.AQUA, 0, 2, "Test F")
+        return _run_split_test(game_state, HColor.LAVENDER, HColor.AQUA, 0, 2, -3, 1, "Test F")
 
 
 # Pytest-compatible test functions

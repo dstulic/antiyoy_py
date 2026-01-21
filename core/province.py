@@ -1,6 +1,5 @@
 """Province management for the game."""
 
-import random
 from typing import Optional, List, Callable, Dict
 from core.hex import Hex
 from core.enums import HColor, PieceType
@@ -520,10 +519,16 @@ class ProvincesReductionWorker:
     
     def _pick_hex_for_city(self, province: Province) -> Optional[Hex]:
         """
-        Pick a hex for placing a city in a province.
+        Pick a hex for placing a city in a province using deterministic algorithm.
         
-        This matches the original game's CityManager.pickHexForCity() method.
-        Priority: random empty hex > random hex without tower > random hex
+        Strategy: Find the hex that is furthest from any enemy hexes (by walking distance).
+        Uses BFS to calculate shortest path distances.
+        
+        Tie-breaking (applied in order):
+        1. Closest to geometrical center of the map
+        2. Closest to geometrical center of the province
+        3. More west (lower coordinate1)
+        4. More north (higher coordinate2)
         """
         if not province:
             return None
@@ -532,22 +537,182 @@ class ProvincesReductionWorker:
         if not hexes:
             return None
         
-        # Priority 1: Try to find a random empty hex
-        empty_hexes = [h for h in hexes if not h.has_piece()]
-        if empty_hexes:
-            return random.choice(empty_hexes)
+        province_color = province.get_color()
+        if not province_color:
+            return None
         
-        # Priority 2: Try to find a random hex without a tower
-        hexes_without_tower = [h for h in hexes if h.piece != PieceType.TOWER and h.piece != PieceType.STRONG_TOWER]
-        if hexes_without_tower:
-            # Try up to 1000 times to find a random one (matching original game)
-            for _ in range(1000):
-                hex = random.choice(hexes_without_tower)
-                if hex.piece != PieceType.TOWER and hex.piece != PieceType.STRONG_TOWER:
-                    return hex
+        # Get access to all hexes to find enemies
+        if not self.provinces_manager.core_model:
+            return None
         
-        # Priority 3: Return any random hex
-        return random.choice(hexes)
+        all_hexes = self.provinces_manager.core_model.hexes
+        
+        # Find all enemy hexes (any hex not of the province's color)
+        enemy_hexes = [h for h in all_hexes if h.color != province_color and h.color != HColor.GRAY]
+        
+        # If no enemies, fall back to center of province
+        if not enemy_hexes:
+            return self._pick_hex_by_province_center(hexes)
+        
+        # Calculate minimum distance to any enemy for each province hex
+        hex_distances = {}
+        for hex in hexes:
+            min_distance = self._calculate_min_distance_to_enemies(hex, enemy_hexes)
+            hex_distances[hex] = min_distance
+        
+        # Find maximum minimum distance
+        max_min_distance = max(hex_distances.values())
+        
+        # Get all hexes with maximum minimum distance
+        candidates = [h for h, dist in hex_distances.items() if dist == max_min_distance]
+        
+        # Apply tie-breaking
+        return self._break_tie_for_city_placement(candidates, province)
+    
+    def _calculate_min_distance_to_enemies(self, start_hex: Hex, enemy_hexes: List[Hex]) -> int:
+        """
+        Calculate the minimum walking distance from start_hex to any enemy hex.
+        Uses BFS to find shortest path.
+        """
+        if not enemy_hexes:
+            return float('inf')
+        
+        # Use BFS to find shortest path to any enemy
+        from collections import deque
+        
+        # Reset flags for BFS
+        visited = set()
+        queue = deque([(start_hex, 0)])
+        visited.add((start_hex.coordinate1, start_hex.coordinate2))
+        
+        while queue:
+            current_hex, distance = queue.popleft()
+            
+            # Check if we reached an enemy hex
+            if current_hex in enemy_hexes:
+                return distance
+            
+            # Explore adjacent hexes
+            for adjacent in current_hex.adjacent_hexes:
+                coord_key = (adjacent.coordinate1, adjacent.coordinate2)
+                if coord_key not in visited:
+                    visited.add(coord_key)
+                    queue.append((adjacent, distance + 1))
+        
+        # No path found (shouldn't happen in a connected map, but handle gracefully)
+        return 0
+    
+    def _break_tie_for_city_placement(self, candidates: List[Hex], province: Province) -> Hex:
+        """
+        Break ties when multiple hexes have the same maximum distance from enemies.
+        Applies multiple deterministic criteria in order:
+        1. Closest to geometrical center of the map
+        2. Closest to geometrical center of the province
+        3. More west (lower coordinate1)
+        4. More north (higher coordinate2)
+        """
+        if len(candidates) == 1:
+            return candidates[0]
+        
+        # Tie-breaker 1: Closest to geometrical center of the map
+        if not self.provinces_manager.core_model:
+            # Fallback if we can't access all hexes
+            return self._break_tie_by_province_center_and_direction(candidates, province)
+        
+        all_hexes = self.provinces_manager.core_model.hexes
+        if not all_hexes:
+            return self._break_tie_by_province_center_and_direction(candidates, province)
+        
+        # Calculate map center (geometrical center of all hexes)
+        map_center_q = sum(h.coordinate1 for h in all_hexes) / len(all_hexes)
+        map_center_r = sum(h.coordinate2 for h in all_hexes) / len(all_hexes)
+        
+        def distance_to_map_center(hex: Hex) -> float:
+            dq = hex.coordinate1 - map_center_q
+            dr = hex.coordinate2 - map_center_r
+            return (dq * dq + dr * dr + (dq + dr) * (dq + dr)) ** 0.5
+        
+        candidates.sort(key=distance_to_map_center)
+        min_map_dist = distance_to_map_center(candidates[0])
+        
+        # Get all hexes with same minimum distance to map center
+        closest_to_map_center = []
+        for h in candidates:
+            if abs(distance_to_map_center(h) - min_map_dist) < 0.0001:  # Float comparison
+                closest_to_map_center.append(h)
+            else:
+                break
+        
+        if len(closest_to_map_center) == 1:
+            return closest_to_map_center[0]
+        candidates = closest_to_map_center
+        
+        # Tie-breaker 2: Closest to geometrical center of the province
+        return self._break_tie_by_province_center_and_direction(candidates, province)
+    
+    def _break_tie_by_province_center_and_direction(self, candidates: List[Hex], province: Province) -> Hex:
+        """
+        Apply remaining tie-breakers: province center, west, north.
+        """
+        if len(candidates) == 1:
+            return candidates[0]
+        
+        province_hexes = province.get_hexes()
+        province_center_q = sum(h.coordinate1 for h in province_hexes) / len(province_hexes)
+        province_center_r = sum(h.coordinate2 for h in province_hexes) / len(province_hexes)
+        
+        def distance_to_province_center(hex: Hex) -> float:
+            dq = hex.coordinate1 - province_center_q
+            dr = hex.coordinate2 - province_center_r
+            return (dq * dq + dr * dr + (dq + dr) * (dq + dr)) ** 0.5
+        
+        candidates.sort(key=distance_to_province_center)
+        min_province_dist = distance_to_province_center(candidates[0])
+        
+        # Get all hexes with same minimum distance to province center
+        closest_to_province_center = []
+        for h in candidates:
+            if abs(distance_to_province_center(h) - min_province_dist) < 0.0001:  # Float comparison
+                closest_to_province_center.append(h)
+            else:
+                break
+        
+        if len(closest_to_province_center) == 1:
+            return closest_to_province_center[0]
+        candidates = closest_to_province_center
+        
+        # Tie-breaker 3: More west (lower coordinate1)
+        min_coordinate1 = min(h.coordinate1 for h in candidates)
+        west_candidates = [h for h in candidates if h.coordinate1 == min_coordinate1]
+        
+        if len(west_candidates) == 1:
+            return west_candidates[0]
+        candidates = west_candidates
+        
+        # Tie-breaker 4: More north (higher coordinate2)
+        max_coordinate2 = max(h.coordinate2 for h in candidates)
+        north_candidates = [h for h in candidates if h.coordinate2 == max_coordinate2]
+        
+        # At this point, if there are still multiple candidates, just return the first one
+        # (should be very rare)
+        return north_candidates[0] if north_candidates else candidates[0]
+    
+    def _pick_hex_by_province_center(self, hexes: List[Hex]) -> Hex:
+        """
+        Fallback: Pick hex closest to province center when no enemies exist.
+        """
+        if not hexes:
+            return None
+        
+        center_q = sum(h.coordinate1 for h in hexes) / len(hexes)
+        center_r = sum(h.coordinate2 for h in hexes) / len(hexes)
+        
+        def distance_to_center(hex: Hex) -> float:
+            dq = hex.coordinate1 - center_q
+            dr = hex.coordinate2 - center_r
+            return (dq * dq + dr * dr + (dq + dr) * (dq + dr)) ** 0.5
+        
+        return min(hexes, key=distance_to_center)
 
 
 class ProvincesManager(IEventListener):
