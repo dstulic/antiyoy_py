@@ -838,6 +838,14 @@ class AiBalancerDefaultV1(AbstractAI):
                 continue
             self.move_afk_unit(province, hex)
     
+    def emulate_mass_march_for_single_unit(self, hex, target_hex):
+        """
+        Try to move a single unit toward target using mass-march-style logic.
+        Returns True if a move was made, False to use fallback (move_afk_unit_quickly).
+        Not implemented: always returns False so fallback is used.
+        """
+        return False
+
     def move_afk_unit(self, province, hex) -> None:
         """Move an AFK unit to perimeter."""
         target_hex = self.find_random_hex_in_perimeter(province)

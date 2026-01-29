@@ -142,6 +142,26 @@ function updateSoundToggleUI() {
     }
 }
 
+// Initialize a new campaign level (creates new session or replaces existing for this level).
+function initCampaignLevel(levelIndex) {
+    return fetch(`/api/game/init/${levelIndex}`, { credentials: 'include' })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                gameSessionId = data.session_id;
+                console.log('Game initialized:', gameSessionId);
+                const loadingDiv = document.querySelector('.game-loading');
+                if (loadingDiv) loadingDiv.style.display = 'none';
+                initializeGameBoard();
+                return loadGameState().then(() => {
+                    autoSelectCityHex();
+                });
+            } else {
+                alert('Failed to initialize game: ' + (data.error || 'Unknown error'));
+            }
+        });
+}
+
 // Initialize game when page loads
 document.addEventListener('DOMContentLoaded', function() {
     // Skip initialization if we're on the test runner page
@@ -150,56 +170,29 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     // First, check if there's an existing session (e.g., from a loaded game)
-    fetch('/api/game/state')
+    fetch('/api/game/state', { credentials: 'include' })
         .then(response => {
             if (response.ok) {
-                // Session exists - use it (e.g., from a loaded game)
-                console.log('Using existing game session');
-                
-                // Hide loading message
-                const loadingDiv = document.querySelector('.game-loading');
-                if (loadingDiv) {
-                    loadingDiv.style.display = 'none';
-                }
-                
-                // Initialize game board rendering
-                initializeGameBoard();
-                
-                // Load game state and auto-select city hex
-                loadGameState().then(() => {
-                    autoSelectCityHex();
+                return response.json().then(data => {
+                    // If we're on a campaign level page and the session is for a different level
+                    // (e.g. user loaded a save then went back and started a new campaign level),
+                    // re-initialize for the requested level instead of reusing the old session.
+                    const sessionLevel = data.level_index;
+                    if (typeof levelIndex === 'number' && typeof sessionLevel === 'number' && sessionLevel !== levelIndex) {
+                        console.log('Session is for level', sessionLevel, 'but we want level', levelIndex, '- initializing new game');
+                        return initCampaignLevel(levelIndex);
+                    }
+                    // Session exists and matches this level - use it
+                    console.log('Using existing game session');
+                    const loadingDiv = document.querySelector('.game-loading');
+                    if (loadingDiv) loadingDiv.style.display = 'none';
+                    initializeGameBoard();
+                    loadGameState().then(() => autoSelectCityHex());
                 });
             } else {
                 // No session exists - initialize new game from campaign level
                 console.log('No existing session, initializing new game');
-                return fetch(`/api/game/init/${levelIndex}`)
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.success) {
-                            gameSessionId = data.session_id;
-                            console.log('Game initialized:', gameSessionId);
-                            
-                            // Hide loading message
-                            const loadingDiv = document.querySelector('.game-loading');
-                            if (loadingDiv) {
-                                loadingDiv.style.display = 'none';
-                            }
-                            
-                            // Initialize game board rendering
-                            initializeGameBoard();
-                            
-                            // Load initial game state and auto-select city hex
-                            loadGameState().then(() => {
-                                autoSelectCityHex();
-                            });
-                            
-                            // Polling disabled for now - game state only updates on user actions
-                            // Can be re-enabled later for AI turns or multiplayer
-                            // startGameStatePolling();
-                        } else {
-                            alert('Failed to initialize game: ' + (data.error || 'Unknown error'));
-                        }
-                    });
+                return initCampaignLevel(levelIndex);
             }
         })
         .catch(error => {

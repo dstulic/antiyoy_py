@@ -340,8 +340,10 @@ def api_game_state():
         # (after AI processing, we're now at the human player's turn)
         session_data['last_player_turn_event_count'] = game_state.history_manager.get_total_event_count()
     
+    level_index = session_data.get('level_index', 0)
     return jsonify({
         'success': True,
+        'level_index': level_index,
         'hexes': hexes,
         'entities': entities,
         'current_color': current_color_value,
