@@ -679,9 +679,9 @@ def api_game_valid_placement():
                     'coordinate2': hex.coordinate2
                 })
     elif piece_type == PieceType.STRONG_TOWER:
-        # For strong towers: hexes with towers within the province
+        # For strong towers: empty hexes or hexes with (weak) towers within the province
         for hex in province.get_hexes():
-            if hex.piece == PieceType.TOWER:
+            if hex.is_empty() or hex.piece == PieceType.TOWER:
                 valid_hexes.append({
                     'coordinate1': hex.coordinate1,
                     'coordinate2': hex.coordinate2
