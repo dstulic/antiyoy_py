@@ -1007,11 +1007,13 @@ class ProvincesManager(IEventListener):
     def _remove_excessive_cities(self, province: Province, city_to_province_map: Optional[Dict[Hex, Province]] = None) -> None:
         """
         Remove excessive cities from a province, keeping only one.
-        
-        This matches the original game's checkToRemoveExcessiveCities() method.
-        When multiple cities exist, removes cities one by one until only one remains.
-        The city with the least adjacent farms is removed first (keeping the one with most farms).
-        
+
+        The city to keep is chosen by (in order):
+        1) Furthest from enemy territory (same BFS walking distance as in split city placement)
+        2) Most adjacent friendly farms
+        3) More east (higher coordinate1)
+        4) More north (higher coordinate2)
+
         Args:
             province: The province to process
             city_to_province_map: Optional map of city hex -> original province (before merging)
@@ -1019,70 +1021,96 @@ class ProvincesManager(IEventListener):
         """
         if not province or not self.core_model:
             return
-        
+
         # Find all cities in the province
         city_hexes = []
         for hex in province.get_hexes():
             if hex.piece == PieceType.CITY:
                 city_hexes.append(hex)
-        
-        # Remove cities until only one remains
-        max_iterations = 1000  # Safety limit
-        iteration = 0
-        while len(city_hexes) >= 2 and iteration < max_iterations:
-            iteration += 1
-            
-            # Find the city with the least adjacent farms (to remove it)
-            city_to_remove = self._find_city_with_least_adjacent_farms(city_hexes)
-            if city_to_remove:
-                # Delete the city piece
-                delete_event = self.core_model.events_manager.factory.create_event(EventType.PIECE_DELETE)
-                from core.events import EventPieceDelete
-                if isinstance(delete_event, EventPieceDelete):
-                    delete_event.set_hex(city_to_remove)
-                    self.core_model.events_manager.apply_event(delete_event)
-                
-                # Remove from list
-                city_hexes.remove(city_to_remove)
-            else:
-                # If we can't find a city to remove, just remove the first one
-                if city_hexes:
-                    city_to_remove = city_hexes[0]
-                    delete_event = self.core_model.events_manager.factory.create_event(EventType.PIECE_DELETE)
-                    from core.events import EventPieceDelete
-                    if isinstance(delete_event, EventPieceDelete):
-                        delete_event.set_hex(city_to_remove)
-                        self.core_model.events_manager.apply_event(delete_event)
-                    city_hexes.remove(city_to_remove)
-        
-        # After removing excessive cities, update the province's city name
-        # to match the province whose city was kept (if we have that information)
-        if city_to_province_map and len(city_hexes) == 1:
-            remaining_city = city_hexes[0]
-            if remaining_city in city_to_province_map:
-                original_province = city_to_province_map[remaining_city]
-                # Update the merged province's name to match the original province's name
-                province.set_city_name(original_province.get_city_name())
 
-    def _find_city_with_least_adjacent_farms(self, city_hexes: List[Hex]) -> Optional[Hex]:
+        if len(city_hexes) < 2:
+            return
+
+        # Choose which city to keep using the new criteria
+        city_to_keep = self._find_city_to_keep_when_merging(province, city_hexes)
+        if city_to_keep is None:
+            city_to_keep = city_hexes[0]
+
+        # Remove all cities except the one we keep
+        for city_hex in city_hexes:
+            if city_hex is city_to_keep:
+                continue
+            delete_event = self.core_model.events_manager.factory.create_event(EventType.PIECE_DELETE)
+            from core.events import EventPieceDelete
+            if isinstance(delete_event, EventPieceDelete):
+                delete_event.set_hex(city_hex)
+                self.core_model.events_manager.apply_event(delete_event)
+
+        # Update the province's city name to match the kept city's original province (if we have that info)
+        if city_to_province_map and city_to_keep in city_to_province_map:
+            original_province = city_to_province_map[city_to_keep]
+            province.set_city_name(original_province.get_city_name())
+
+    def _find_city_to_keep_when_merging(self, province: Province, city_hexes: List[Hex]) -> Optional[Hex]:
         """
-        Find the city with the least number of adjacent friendly farms.
-        
-        This matches the original game's findCityWithLeastAmountOfAdjacentFarms() method.
+        Choose which city to keep when multiple provinces are merged into one.
+
+        Criteria (in order):
+        1) Furthest from enemy territory (BFS walking distance, same as split city placement)
+        2) Most adjacent friendly farms
+        3) More east (higher coordinate1)
+        4) More north (higher coordinate2)
         """
         if not city_hexes:
             return None
-        
-        best_hex = None
-        min_farms = -1
-        
-        for hex in city_hexes:
-            farm_count = self._count_adjacent_friendly_farms(hex)
-            if best_hex is None or farm_count < min_farms:
-                best_hex = hex
-                min_farms = farm_count
-        
-        return best_hex
+        if len(city_hexes) == 1:
+            return city_hexes[0]
+
+        province_color = province.get_color()
+        all_hexes = self.core_model.hexes if self.core_model else []
+        enemy_hexes = [h for h in all_hexes if h.color != province_color and h.color != HColor.GRAY]
+
+        # 1) Furthest from enemy territory (max of min walking distance to any enemy)
+        max_dist = -1
+        candidates = []
+        for h in city_hexes:
+            d = self.reduction_worker._calculate_min_distance_to_enemies(h, enemy_hexes)
+            if d > max_dist:
+                max_dist = d
+                candidates = [h]
+            elif d == max_dist:
+                candidates.append(h)
+
+        if len(candidates) == 1:
+            return candidates[0]
+
+        # 2) Most adjacent farms
+        max_farms = -1
+        candidates2 = []
+        for h in candidates:
+            n = self._count_adjacent_friendly_farms(h)
+            if n > max_farms:
+                max_farms = n
+                candidates2 = [h]
+            elif n == max_farms:
+                candidates2.append(h)
+        candidates = candidates2
+
+        if len(candidates) == 1:
+            return candidates[0]
+
+        # 3) More east (higher coordinate1)
+        max_c1 = max(h.coordinate1 for h in candidates)
+        candidates = [h for h in candidates if h.coordinate1 == max_c1]
+
+        if len(candidates) == 1:
+            return candidates[0]
+
+        # 4) More north (higher coordinate2)
+        max_c2 = max(h.coordinate2 for h in candidates)
+        candidates = [h for h in candidates if h.coordinate2 == max_c2]
+
+        return candidates[0] if candidates else None
 
     def _count_adjacent_friendly_farms(self, hex: Hex) -> int:
         """

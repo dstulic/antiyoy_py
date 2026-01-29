@@ -1556,9 +1556,6 @@ def api_unit_tests_run(test_name):
     try:
         session_id = session.get('session_id')
         print(f"=== RUN TEST ENDPOINT ===")
-        print(f"Run test - Session ID from cookie: {session_id}")
-        print(f"Run test - Session data: {dict(session)}")
-        print(f"Run test - Available sessions: {list(game_sessions.keys())}")
         
         # Normalize test name first
         from tests.visual.visual_test_base import VisualTest
@@ -1572,7 +1569,6 @@ def api_unit_tests_run(test_name):
             for sid, data in game_sessions.items():
                 stored_name = data.get('test_name')
                 if stored_name == normalized_test_name:
-                    print(f"Found session by test name: {sid}")
                     session['session_id'] = sid
                     session_id = sid
                     session.modified = True

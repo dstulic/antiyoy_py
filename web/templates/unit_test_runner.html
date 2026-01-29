@@ -40,11 +40,27 @@
             cursor: not-allowed;
         }
         .test-name-label {
-            flex: 1;
             color: #e2e8f0;
             font-size: 16px;
             font-weight: bold;
-            text-align: center;
+        }
+        .test-name-result-wrapper {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+        }
+        .test-result-label {
+            font-size: 14px;
+            font-weight: 600;
+            min-width: 3em;
+        }
+        .test-result-label.pass {
+            color: #68d391;
+        }
+        .test-result-label.fail {
+            color: #fc8181;
         }
         .game-container {
             flex: 1;
@@ -114,7 +130,10 @@
             <button id="forwardBtn" onclick="goForward()" disabled>Forward →</button>
             <button id="editBtn" onclick="enterEditMode()">Edit</button>
             <button id="saveBtn" onclick="saveMap()" disabled style="display: none;">Save</button>
-            <div class="test-name-label" id="testNameLabel">{{ test_name }}</div>
+            <div class="test-name-result-wrapper">
+                <div class="test-name-label" id="testNameLabel">{{ test_name }}</div>
+                <span id="testResultLabel" class="test-result-label"></span>
+            </div>
         </div>
         
         <!-- Status Bar (shown only in edit mode) -->
@@ -261,6 +280,7 @@
                     stateMode = 'initial';
                     console.log('Loading game state with', data.hexes?.length || 0, 'hexes');
                     loadGameState(data);
+                    setTestResultLabel('');
                 } else {
                     console.error('Init failed:', data.error);
                     alert('Error initializing test: ' + (data.error || 'Unknown error'));
@@ -281,6 +301,7 @@
                 if (data.success) {
                     stateMode = 'initial';
                     loadGameState(data);
+                    setTestResultLabel('');
                 } else {
                     alert('Error resetting test: ' + (data.error || 'Unknown error'));
                 }
@@ -289,6 +310,15 @@
             }
         }
         
+        function setTestResultLabel(passOrFailOrEmpty) {
+            const el = document.getElementById('testResultLabel');
+            if (!el) return;
+            el.textContent = passOrFailOrEmpty;
+            el.classList.remove('pass', 'fail');
+            if (passOrFailOrEmpty === 'Pass') el.classList.add('pass');
+            if (passOrFailOrEmpty === 'Fail') el.classList.add('fail');
+        }
+
         async function runTest() {
             try {
                 const response = await fetch(`/api/unit_tests/run/${encodeURIComponent(currentTestName)}`, {
@@ -299,10 +329,13 @@
                 if (data.success) {
                     stateMode = 'final';
                     loadGameState(data);
+                    setTestResultLabel('Pass');
                 } else {
+                    setTestResultLabel('Fail');
                     alert('Error running test: ' + (data.error || 'Unknown error'));
                 }
             } catch (error) {
+                setTestResultLabel('Fail');
                 alert('Error running test: ' + error.message);
             }
         }
