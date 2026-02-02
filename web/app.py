@@ -2257,6 +2257,76 @@ def api_unit_tests_build_land():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+@app.route('/api/unit_tests/set_hex_piece', methods=['POST'])
+def api_unit_tests_set_hex_piece():
+    """Set or clear piece on a hex in edit mode (tree menu: clear, pine, palm)."""
+    try:
+        session_id = session.get('session_id')
+        if not session_id or session_id not in game_sessions:
+            for sid, data in game_sessions.items():
+                if data.get('test_name'):
+                    session['session_id'] = sid
+                    session_id = sid
+                    session.modified = True
+                    break
+            if not session_id or session_id not in game_sessions:
+                return jsonify({'success': False, 'error': 'No active test session'}), 404
+
+        session_data = game_sessions[session_id]
+        game_state = session_data.get('game_state')
+        if not game_state:
+            return jsonify({'success': False, 'error': 'Game state not available'}), 500
+
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'No data provided'}), 400
+
+        try:
+            coordinate1 = int(data.get('coordinate1'))
+            coordinate2 = int(data.get('coordinate2'))
+            piece_str = (data.get('piece') or '').strip().lower()
+        except (ValueError, TypeError) as e:
+            return jsonify({'success': False, 'error': f'Invalid parameters: {e}'}), 400
+
+        if piece_str not in ('clear', 'pine', 'palm'):
+            return jsonify({'success': False, 'error': 'piece must be clear, pine, or palm'}), 400
+
+        hex_obj = game_state.get_hex(coordinate1, coordinate2)
+        if not hex_obj:
+            return jsonify({'success': False, 'error': 'Hex not found'}), 404
+
+        from core.enums import EventType, PieceType
+        from core.events import EventPieceDelete
+
+        if piece_str == 'clear':
+            if hex_obj.piece:
+                delete_event = game_state.events_manager.factory.create_event(EventType.PIECE_DELETE)
+                if isinstance(delete_event, EventPieceDelete):
+                    delete_event.set_hex(hex_obj)
+                    game_state.events_manager.apply_event(delete_event)
+            session_data['game_state'] = game_state
+            return jsonify({'success': True, 'message': 'Hex cleared'})
+
+        if piece_str == 'pine':
+            if hex_obj.piece and hex_obj.piece != PieceType.PALM:
+                return jsonify({'success': False, 'error': 'Pine can only replace empty hex or palm'}), 400
+            hex_obj.set_piece(PieceType.PINE)
+            hex_obj.unit_id = -1
+        elif piece_str == 'palm':
+            if hex_obj.piece and hex_obj.piece != PieceType.PINE:
+                return jsonify({'success': False, 'error': 'Palm can only replace empty hex or pine'}), 400
+            hex_obj.set_piece(PieceType.PALM)
+            hex_obj.unit_id = -1
+
+        session_data['game_state'] = game_state
+        return jsonify({'success': True, 'message': f'Hex set to {piece_str}'})
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 def _serialize_game_state_for_test(game_state):
     """Serialize game state for visual test display."""
     # Get all hexes (no fog of war for tests)

@@ -118,6 +118,7 @@ Start the Flask development server:
 
 ```bash
 cd antiyoy_py
+source .venv/bin/activate
 .venv/bin/python web/app.py
 ```
 

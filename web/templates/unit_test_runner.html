@@ -114,6 +114,39 @@
             padding-right: 10px;
             margin-right: 10px;
         }
+        .tree-build-menu {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-shrink: 0;
+            border-right: 2px solid rgba(255, 255, 255, 0.2);
+            padding-right: 10px;
+            margin-right: 10px;
+        }
+        .tree-build-menu .tree-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 36px;
+            height: 36px;
+            padding: 4px;
+            background: rgba(255, 255, 255, 0.15);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 18px;
+        }
+        .tree-build-menu .tree-btn:hover:not(.disabled) {
+            background: rgba(255, 255, 255, 0.25);
+        }
+        .tree-build-menu .tree-btn.disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .tree-build-menu .tree-btn img {
+            max-width: 28px;
+            max-height: 28px;
+        }
         .piece-build-menu {
             /* Allow it to be empty without affecting layout */
             min-width: 0;
@@ -173,6 +206,9 @@
             <div class="build-menu-inline" id="editBuildMenu" style="display: none;">
                 <div class="land-build-menu" id="editLandBuildMenu">
                     <!-- Land build buttons will be populated here -->
+                </div>
+                <div class="tree-build-menu" id="editTreeBuildMenu">
+                    <!-- Tree build buttons will be populated here -->
                 </div>
                 <div class="piece-build-menu" id="editPieceBuildMenu">
                     <!-- Piece build items will be populated here -->
@@ -567,15 +603,17 @@
         function populateEditBuildMenu(hex) {
             const buildMenu = document.getElementById('editBuildMenu');
             const landMenu = document.getElementById('editLandBuildMenu');
+            const treeMenu = document.getElementById('editTreeBuildMenu');
             const pieceMenu = document.getElementById('editPieceBuildMenu');
             
-            if (!buildMenu || !landMenu || !pieceMenu) {
+            if (!buildMenu || !landMenu || !treeMenu || !pieceMenu) {
                 console.error('populateEditBuildMenu: Build menu elements not found');
                 return;
             }
             
             console.log('populateEditBuildMenu: Fetching province data for hex:', hex.coordinate1, hex.coordinate2);
             landMenu.innerHTML = '';
+            treeMenu.innerHTML = '';
             pieceMenu.innerHTML = '';
             
             // Check if hex is black (border hex)
@@ -588,6 +626,11 @@
             
             // Populate land build buttons
             populateLandBuildMenu(hex, isBlackHex);
+            
+            // Populate tree build menu only for real hexes (not border)
+            if (!isBlackHex) {
+                populateTreeBuildMenu(hex);
+            }
             
             // Only fetch province data for piece menu if not a black hex
             if (!isBlackHex) {
@@ -782,6 +825,95 @@
                 'whiskey': '#D7A86E'
             };
             return colorMap[colorName.toLowerCase()] || '#808080';
+        }
+        
+        function populateTreeBuildMenu(hex) {
+            const treeMenu = document.getElementById('editTreeBuildMenu');
+            if (!treeMenu) return;
+            
+            const piece = hex.piece ? String(hex.piece).toLowerCase() : null;
+            const hasPiece = !!piece;
+            const isEmpty = !hasPiece;
+            const isPine = piece === 'pine';
+            const isPalm = piece === 'palm';
+            
+            // Clear: enabled when hex has any piece (including trees)
+            const clearBtn = document.createElement('button');
+            clearBtn.className = 'tree-btn' + (hasPiece ? '' : ' disabled');
+            clearBtn.title = 'Clear tree or any piece from hex';
+            clearBtn.textContent = '🗑';
+            clearBtn.type = 'button';
+            if (hasPiece) {
+                clearBtn.onclick = () => handleTreeBuild('clear', hex);
+            }
+            treeMenu.appendChild(clearBtn);
+            
+            // Pine: enabled when empty or has palm
+            const pineBtn = document.createElement('button');
+            pineBtn.className = 'tree-btn' + (isEmpty || isPalm ? '' : ' disabled');
+            pineBtn.title = 'Place pine (replaces empty or palm)';
+            pineBtn.type = 'button';
+            const pineImg = document.createElement('img');
+            pineImg.src = '/static/assets/original_game_assets/atlas/pine.png';
+            pineImg.alt = 'Pine';
+            pineBtn.appendChild(pineImg);
+            if (isEmpty || isPalm) {
+                pineBtn.onclick = () => handleTreeBuild('pine', hex);
+            }
+            treeMenu.appendChild(pineBtn);
+            
+            // Palm: enabled when empty or has pine
+            const palmBtn = document.createElement('button');
+            palmBtn.className = 'tree-btn' + (isEmpty || isPine ? '' : ' disabled');
+            palmBtn.title = 'Place palm (replaces empty or pine)';
+            palmBtn.type = 'button';
+            const palmImg = document.createElement('img');
+            palmImg.src = '/static/assets/original_game_assets/atlas/palm.png';
+            palmImg.alt = 'Palm';
+            palmBtn.appendChild(palmImg);
+            if (isEmpty || isPine) {
+                palmBtn.onclick = () => handleTreeBuild('palm', hex);
+            }
+            treeMenu.appendChild(palmBtn);
+        }
+        
+        function handleTreeBuild(piece, hex) {
+            console.log('Tree build:', piece, 'on hex', hex.coordinate1, hex.coordinate2);
+            
+            fetch('/api/unit_tests/set_hex_piece', {
+                method: 'POST',
+                credentials: 'include',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    coordinate1: hex.coordinate1,
+                    coordinate2: hex.coordinate2,
+                    piece: piece
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    fetch('/api/unit_tests/state', { credentials: 'include' })
+                        .then(response => response.json())
+                        .then(stateData => {
+                            if (stateData.success) {
+                                loadGameState(stateData);
+                                if (gameBoard && gameBoard.selectedHex) {
+                                    populateEditBuildMenu(gameBoard.selectedHex);
+                                }
+                                if (gameBoard) gameBoard.render();
+                            }
+                        });
+                } else {
+                    alert('Tree action failed: ' + (data.error || 'Unknown error'));
+                }
+            })
+            .catch(error => {
+                console.error('Error setting hex piece:', error);
+                alert('Error: ' + error.message);
+            });
         }
         
         function handleLandBuild(color, hex) {
