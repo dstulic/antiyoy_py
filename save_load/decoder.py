@@ -530,7 +530,7 @@ class GameStateDecoder:
                     hex = game_state.get_hex(c1, c2)
                     if hex:
                         event.set_hex(hex)
-                        event.set_target_color(color)
+                        event.set_color(color)
                 except (ValueError, KeyError):
                     pass
         elif event_type == EventType.SET_MONEY:

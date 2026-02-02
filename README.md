@@ -49,6 +49,17 @@ pytest tests/ -v
 pytest tests/test_hex.py::TestHex::test_hex_initialization -v
 ```
 
+### Run visual tests:
+Visual tests can be run from the command line (they also work in the web UI):
+
+```bash
+# Run all visual tests
+pytest tests/visual/ -v
+
+# Run a specific visual test
+pytest tests/visual/test_split_province.py::test_split_province_A -v
+```
+
 ### Run tests with coverage:
 
 Generate coverage report (terminal output):
@@ -84,7 +95,7 @@ You can also combine both terminal and HTML reports:
 pytest tests/ --cov=core --cov=save_load --cov=players --cov=commands --cov=visibility --cov=ai --cov-report=term --cov-report=html -v
 ```
 
-
+**Note:** The `tests/` path includes all tests, including visual tests in `tests/visual/`. Visual tests are automatically included when running the coverage command above.
 
 ## Project Structure
 
@@ -107,6 +118,7 @@ Start the Flask development server:
 
 ```bash
 cd antiyoy_py
+source .venv/bin/activate
 .venv/bin/python web/app.py
 ```
 
@@ -122,4 +134,5 @@ python web/app.py
 ```
 
 The web interface will be available at `http://localhost:5000`
+And the visual test are available at `http://localhost:5000/unit_tests`
 

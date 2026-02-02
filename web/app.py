@@ -23,6 +23,9 @@ ASSETS_ROOT = PROJECT_ROOT.parent / "antiyoy_hd" / "assets"
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)  # For session management
+app.config['PERMANENT_SESSION_LIFETIME'] = 3600  # 1 hour
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 
 # Configure static folders
 app.static_folder = 'static'
@@ -337,8 +340,10 @@ def api_game_state():
         # (after AI processing, we're now at the human player's turn)
         session_data['last_player_turn_event_count'] = game_state.history_manager.get_total_event_count()
     
+    level_index = session_data.get('level_index', 0)
     return jsonify({
         'success': True,
+        'level_index': level_index,
         'hexes': hexes,
         'entities': entities,
         'current_color': current_color_value,
@@ -676,9 +681,9 @@ def api_game_valid_placement():
                     'coordinate2': hex.coordinate2
                 })
     elif piece_type == PieceType.STRONG_TOWER:
-        # For strong towers: hexes with towers within the province
+        # For strong towers: empty hexes or hexes with (weak) towers within the province
         for hex in province.get_hexes():
-            if hex.piece == PieceType.TOWER:
+            if hex.is_empty() or hex.piece == PieceType.TOWER:
                 valid_hexes.append({
                     'coordinate1': hex.coordinate1,
                     'coordinate2': hex.coordinate2
@@ -1423,6 +1428,956 @@ def api_game_defense_indicators():
     return jsonify({
         'success': True,
         'defense_indicators': defense_indicators
+    })
+
+
+# Visual test framework endpoints
+@app.route('/unit_tests')
+def unit_tests_page():
+    """Unit tests selection page."""
+    return render_template('unit_tests.html')
+
+
+@app.route('/unit_tests/run/<test_name>')
+def unit_test_runner_page(test_name):
+    """Test runner page for a specific test."""
+    return render_template('unit_test_runner.html', test_name=test_name)
+
+
+@app.route('/api/unit_tests/list')
+def api_unit_tests_list():
+    """Get list of all available visual tests."""
+    try:
+        # Import registry to ensure all tests are registered
+        import tests.visual.registry  # noqa: F401
+        from tests.visual.visual_test_base import VisualTest
+        
+        tests = []
+        for test in VisualTest.get_all_tests():
+            tests.append({
+                'name': test.name,
+                'description': test.description
+            })
+        
+        return jsonify({
+            'success': True,
+            'tests': tests
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/unit_tests/init/<test_name>')
+def api_unit_tests_init(test_name):
+    """Initialize a visual test and return initial state."""
+    print(f"=== INIT ENDPOINT CALLED: {test_name} ===")
+    print(f"Current session ID: {session.get('session_id')}")
+    try:
+        # Import registry to ensure all tests are registered
+        import tests.visual.registry  # noqa: F401
+        from tests.visual.visual_test_base import VisualTest
+        import uuid
+        import copy
+        
+        test = VisualTest.get_test(test_name)
+        if not test:
+            return jsonify({'success': False, 'error': f'Test "{test_name}" not found'}), 404
+        
+        # Use the test's actual name to ensure consistency
+        actual_test_name = test.name
+        
+        # Check if current session cookie points to a different test
+        old_session_id = session.get('session_id')
+        if old_session_id and old_session_id in game_sessions:
+            old_session_data = game_sessions[old_session_id]
+            old_test_name = old_session_data.get('test_name')
+            if old_test_name != actual_test_name:
+                print(f"Current session cookie points to different test: {old_test_name} != {actual_test_name}. Clearing old session.")
+                # Remove the old session since it's for a different test
+                del game_sessions[old_session_id]
+                # Clear the session cookie
+                session.pop('session_id', None)
+        
+        # Set up initial state
+        initial_state = test.setup()
+        
+        # Ensure adjacency graph is built
+        from save_load.decoder import _build_adjacency_graph
+        _build_adjacency_graph(initial_state)
+        
+        # Clear any old sessions for this test to avoid conflicts
+        # (in case user navigated from another test)
+        old_sessions_to_remove = []
+        for sid, data in game_sessions.items():
+            if data.get('test_name') == actual_test_name:
+                old_sessions_to_remove.append(sid)
+        for sid in old_sessions_to_remove:
+            del game_sessions[sid]
+            print(f"Removed old session for test: {sid}")
+        
+        # Always create a new session for a test initialization
+        session_id = str(uuid.uuid4())
+        session['session_id'] = session_id
+        session.permanent = True  # Make session persistent
+        session.modified = True  # Force session to be saved
+        
+        # Store initial state and test info
+        # Note: We'll re-run setup() when needed to get fresh state copies
+        # Use actual_test_name to ensure consistency with test.name
+        game_sessions[session_id] = {
+            'game_state': initial_state,
+            'test_name': actual_test_name,  # Use test's actual name for consistency
+            'test_instance': test,
+            'initial_state': initial_state,  # Keep reference to initial state (for serialization)
+            'final_state': None,  # Will be set after test execution
+            'state_mode': 'initial'  # 'initial' or 'final'
+        }
+        
+        cleanup_oldest_session()
+        
+        print(f"Created test session: {session_id} for test: {test_name}")
+        print(f"Session cookie should be set. Session data: {dict(session)}")
+        print(f"Total active sessions: {len(game_sessions)}")
+        
+        # Serialize initial state for frontend
+        response_obj = _serialize_game_state_for_test(initial_state)
+        # _serialize_game_state_for_test returns a Response object, get the JSON
+        json_data = response_obj.get_json()
+        json_data['session_id'] = session_id
+        return jsonify(json_data)
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/unit_tests/run/<test_name>')
+def api_unit_tests_run(test_name):
+    """Run a visual test and return final state."""
+    try:
+        session_id = session.get('session_id')
+        print(f"=== RUN TEST ENDPOINT ===")
+        
+        # Normalize test name first
+        from tests.visual.visual_test_base import VisualTest
+        test_from_url = VisualTest.get_test(test_name)
+        if not test_from_url:
+            return jsonify({'success': False, 'error': f'Test "{test_name}" not found'}), 404
+        normalized_test_name = test_from_url.name
+        
+        if not session_id or session_id not in game_sessions:
+            # Try to find session by normalized test name as fallback
+            for sid, data in game_sessions.items():
+                stored_name = data.get('test_name')
+                if stored_name == normalized_test_name:
+                    session['session_id'] = sid
+                    session_id = sid
+                    session.modified = True
+                    break
+            if not session_id or session_id not in game_sessions:
+                return jsonify({'success': False, 'error': f'No active test session for "{normalized_test_name}". Please initialize the test first.'}), 404
+        
+        session_data = game_sessions[session_id]
+        stored_test_name = session_data.get('test_name')
+        
+        # Check if stored test name matches the requested test name (normalized)
+        if stored_test_name != normalized_test_name:
+            return jsonify({'success': False, 'error': f'Session is for a different test. Stored="{stored_test_name}", requested="{normalized_test_name}". Please navigate to the test and click "Reset" to re-initialize.'}), 400
+        
+        test = session_data.get('test_instance')
+        initial_state = session_data.get('initial_state')
+        
+        if not test or not initial_state:
+            return jsonify({'success': False, 'error': 'Test not properly initialized'}), 500
+        
+        # Create a copy of initial state for running the test
+        # We need to re-run setup to get a fresh state, since run() modifies the state
+        # Alternatively, we could serialize/deserialize, but re-running setup is simpler
+        fresh_state = test.setup()
+        from save_load.decoder import _build_adjacency_graph
+        _build_adjacency_graph(fresh_state)
+        
+        # Run the test (this modifies the game state)
+        final_state = test.run(fresh_state)
+        
+        # Store final state
+        session_data['final_state'] = final_state
+        session_data['state_mode'] = 'final'
+        session_data['game_state'] = final_state
+        
+        # Serialize final state for frontend
+        return _serialize_game_state_for_test(final_state)
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/unit_tests/reset')
+@app.route('/api/unit_tests/reset/<test_name>')
+def api_unit_tests_reset(test_name=None):
+    """Reset test view to initial state."""
+    try:
+        from tests.visual.visual_test_base import VisualTest
+        import uuid
+        
+        # If test_name is provided, normalize it
+        normalized_test_name = None
+        if test_name:
+            test_from_url = VisualTest.get_test(test_name)
+            if test_from_url:
+                normalized_test_name = test_from_url.name
+        
+        session_id = session.get('session_id')
+        print(f"=== RESET TEST ENDPOINT ===")
+        print(f"Reset test - Session ID from cookie: {session_id}")
+        print(f"Reset test - Requested test name: {test_name}")
+        print(f"Reset test - Normalized test name: {normalized_test_name}")
+        print(f"Reset test - Session data: {dict(session)}")
+        print(f"Reset test - Available sessions: {list(game_sessions.keys())}")
+        
+        # Check if we have a valid session for the requested test
+        session_data = None
+        if session_id and session_id in game_sessions:
+            session_data = game_sessions[session_id]
+            stored_test_name = session_data.get('test_name')
+            
+            # If test_name was provided and doesn't match, we need to create a new session
+            if normalized_test_name and stored_test_name != normalized_test_name:
+                print(f"Session mismatch: stored={stored_test_name}, requested={normalized_test_name}. Creating new session.")
+                session_data = None  # Force creation of new session
+            elif normalized_test_name and stored_test_name == normalized_test_name:
+                # Session matches, use it
+                test = session_data.get('test_instance')
+            else:
+                # No test_name provided, use existing session
+                test = session_data.get('test_instance')
+        else:
+            # No valid session, try to find one by test name
+            if normalized_test_name:
+                for sid, data in game_sessions.items():
+                    if data.get('test_name') == normalized_test_name:
+                        session_id = sid
+                        session['session_id'] = sid
+                        session.modified = True
+                        session_data = data
+                        test = data.get('test_instance')
+                        break
+        
+        # If we still don't have a valid session/test, create a new one
+        if not session_data or not session_data.get('test_instance'):
+            if not normalized_test_name:
+                return jsonify({'success': False, 'error': 'No test name provided and no valid session found'}), 400
+            
+            print(f"Creating new session for test: {normalized_test_name}")
+            test = VisualTest.get_test(normalized_test_name)
+            if not test:
+                return jsonify({'success': False, 'error': f'Test "{normalized_test_name}" not found'}), 404
+            
+            # Create new session
+            session_id = str(uuid.uuid4())
+            session['session_id'] = session_id
+            session.permanent = True
+            session.modified = True
+            
+            # Clear any old sessions for this test
+            old_sessions_to_remove = []
+            for sid, data in game_sessions.items():
+                if data.get('test_name') == normalized_test_name:
+                    old_sessions_to_remove.append(sid)
+            for sid in old_sessions_to_remove:
+                del game_sessions[sid]
+        
+        if not test:
+            return jsonify({'success': False, 'error': 'Test instance not available'}), 500
+        
+        # Re-run setup to get a fresh initial state
+        fresh_initial_state = test.setup()
+        from save_load.decoder import _build_adjacency_graph
+        _build_adjacency_graph(fresh_initial_state)
+        
+        # Update or create session with fresh initial state
+        if session_id not in game_sessions:
+            # Create new session entry
+            game_sessions[session_id] = {
+                'game_state': fresh_initial_state,
+                'test_name': test.name,
+                'test_instance': test,
+                'initial_state': fresh_initial_state,
+                'final_state': None,
+                'state_mode': 'initial'
+            }
+        else:
+            # Update existing session
+            session_data = game_sessions[session_id]
+            session_data['game_state'] = fresh_initial_state
+            session_data['initial_state'] = fresh_initial_state
+            session_data['final_state'] = None
+            session_data['state_mode'] = 'initial'
+            session_data['test_name'] = test.name  # Update test name in case it changed
+            session_data['test_instance'] = test
+        
+        # Serialize initial state for frontend
+        return _serialize_game_state_for_test(fresh_initial_state)
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/unit_tests/state')
+def api_unit_tests_state():
+    """Get current test state (initial or final)."""
+    try:
+        session_id = session.get('session_id')
+        if not session_id or session_id not in game_sessions:
+            return jsonify({'success': False, 'error': 'No active test session'}), 404
+        
+        session_data = game_sessions[session_id]
+        current_state = session_data.get('game_state')
+        state_mode = session_data.get('state_mode', 'initial')
+        test_name = session_data.get('test_name', '')
+        
+        if not current_state:
+            return jsonify({'success': False, 'error': 'Game state not available'}), 500
+        
+        # Serialize current state
+        result = _serialize_game_state_for_test(current_state)
+        # Add metadata
+        if isinstance(result, tuple):
+            response_data = result[0].get_json()
+            response_data['state_mode'] = state_mode
+            response_data['test_name'] = test_name
+            return jsonify(response_data)
+        else:
+            return result
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/unit_tests/save/<test_name>', methods=['POST'])
+def api_unit_tests_save(test_name):
+    """Save current game state to map file."""
+    try:
+        session_id = session.get('session_id')
+        print(f"=== SAVE MAP ENDPOINT ===")
+        print(f"Save map - Session ID from cookie: {session_id}")
+        print(f"Save map - Available sessions: {list(game_sessions.keys())}")
+        
+        # Normalize test name first
+        from tests.visual.visual_test_base import VisualTest
+        test_from_url = VisualTest.get_test(test_name)
+        if not test_from_url:
+            return jsonify({'success': False, 'error': f'Test "{test_name}" not found'}), 404
+        normalized_test_name = test_from_url.name
+        
+        if not session_id or session_id not in game_sessions:
+            # Try to find session by normalized test name as fallback
+            for sid, data in game_sessions.items():
+                stored_name = data.get('test_name')
+                if stored_name == normalized_test_name:
+                    print(f"Found session by test name: {sid}")
+                    session['session_id'] = sid
+                    session_id = sid
+                    session.modified = True
+                    break
+            if not session_id or session_id not in game_sessions:
+                return jsonify({'success': False, 'error': f'No active test session for "{normalized_test_name}". Please initialize the test first.'}), 404
+        
+        session_data = game_sessions[session_id]
+        stored_test_name = session_data.get('test_name')
+        
+        # Check if stored test name matches the requested test name (normalized)
+        if stored_test_name != normalized_test_name:
+            return jsonify({'success': False, 'error': f'Session is for a different test. Stored="{stored_test_name}", requested="{normalized_test_name}". Please navigate to the test and click "Reset" to re-initialize.'}), 400
+        
+        test = session_data.get('test_instance')
+        # Save the current game state (which should be the initial state after reset in edit mode)
+        # This is what the map file represents - the base state before test runs
+        current_state = session_data.get('game_state')
+        
+        if not test or not current_state:
+            return jsonify({'success': False, 'error': 'Test or game state not available'}), 500
+        
+        # Save the current game state to map file
+        success = test.save_map(current_state)
+        
+        if success:
+            # Reload the map to get fresh initial state
+            fresh_initial_state = test.load_map()
+            if fresh_initial_state:
+                from save_load.decoder import _build_adjacency_graph
+                _build_adjacency_graph(fresh_initial_state)
+                
+                # Update session with fresh initial state (use deepcopy to avoid reference issues)
+                import copy
+                session_data['initial_state'] = copy.deepcopy(fresh_initial_state)
+                session_data['game_state'] = copy.deepcopy(fresh_initial_state)
+                session_data['state_mode'] = 'initial'
+                session_data['final_state'] = None  # Clear final state since we're resetting
+            
+            return jsonify({'success': True, 'message': 'Map saved successfully'})
+        else:
+            return jsonify({'success': False, 'error': 'Failed to save map file'}), 500
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/unit_tests/province/<coordinate1>/<coordinate2>')
+def api_unit_tests_province(coordinate1, coordinate2):
+    """Get province data for a hex (for edit mode - works for all provinces)."""
+    try:
+        # Convert string coordinates to integers (handles negative numbers)
+        try:
+            coord1 = int(coordinate1)
+            coord2 = int(coordinate2)
+        except ValueError:
+            return jsonify({'success': False, 'error': 'Invalid coordinates'}), 400
+        
+        session_id = session.get('session_id')
+        if not session_id or session_id not in game_sessions:
+            # Try to find session by test name as fallback
+            for sid, data in game_sessions.items():
+                session_id = sid
+                session['session_id'] = sid
+                session.modified = True
+                break
+            if not session_id or session_id not in game_sessions:
+                return jsonify({'success': False, 'error': 'No active test session'}), 404
+        
+        session_data = game_sessions[session_id]
+        game_state = session_data.get('game_state')
+        
+        if not game_state:
+            return jsonify({'success': False, 'error': 'Game state not available'}), 500
+        
+        # Get the hex
+        hex_obj = game_state.get_hex(coord1, coord2)
+        if not hex_obj:
+            return jsonify({
+                'success': True,
+                'province_id': None,
+                'money': 0,
+                'income': 0,
+                'consumption': 0,
+                'profit': 0,
+                'city_name': '',
+                'piece_costs': {},
+                'piece_maintenance': {},
+                'piece_strength': {},
+                'province_color': None
+            })
+        
+        # Get the province for this hex
+        province = hex_obj.get_province()
+        if not province:
+            # Try to find province slowly as fallback
+            province = game_state.provinces_manager.find_province_slowly(hex_obj)
+        
+        if not province:
+            return jsonify({
+                'success': True,
+                'province_id': None,
+                'money': 0,
+                'income': 0,
+                'consumption': 0,
+                'profit': 0,
+                'city_name': '',
+                'piece_costs': {},
+                'piece_maintenance': {},
+                'piece_strength': {},
+                'province_color': None
+            })
+        
+        # Calculate income, consumption, and profit
+        if game_state.economics_manager:
+            income = game_state.economics_manager.calculate_province_income(province)
+            consumption = game_state.economics_manager.calculate_province_consumption(province)
+            profit = game_state.economics_manager.calculate_province_profit(province)
+        else:
+            income = 0
+            consumption = 0
+            profit = 0
+        
+        # Get piece costs and strength (for display, but costs are ignored in edit mode)
+        piece_costs = {}
+        piece_maintenance = {}
+        piece_strength = {}
+        if game_state.ruleset:
+            from core.enums import PieceType
+            piece_costs = {
+                'peasant': game_state.ruleset.get_price(province, PieceType.PEASANT),
+                'spearman': game_state.ruleset.get_price(province, PieceType.SPEARMAN),
+                'baron': game_state.ruleset.get_price(province, PieceType.BARON),
+                'knight': game_state.ruleset.get_price(province, PieceType.KNIGHT),
+                'tower': game_state.ruleset.get_price(province, PieceType.TOWER),
+                'strong_tower': game_state.ruleset.get_price(province, PieceType.STRONG_TOWER),
+                'farm': game_state.ruleset.get_price(province, PieceType.FARM),
+            }
+            
+            piece_maintenance = {
+                'peasant': -game_state.ruleset.get_consumption(PieceType.PEASANT),
+                'spearman': -game_state.ruleset.get_consumption(PieceType.SPEARMAN),
+                'baron': -game_state.ruleset.get_consumption(PieceType.BARON),
+                'knight': -game_state.ruleset.get_consumption(PieceType.KNIGHT),
+                'tower': -game_state.ruleset.get_consumption(PieceType.TOWER),
+                'strong_tower': -game_state.ruleset.get_consumption(PieceType.STRONG_TOWER),
+                'farm': game_state.ruleset.get_hex_income(PieceType.FARM),
+            }
+            
+            from core.core_utils import get_strength
+            piece_strength = {
+                'peasant': get_strength(PieceType.PEASANT),
+                'spearman': get_strength(PieceType.SPEARMAN),
+                'baron': get_strength(PieceType.BARON),
+                'knight': get_strength(PieceType.KNIGHT),
+                'tower': game_state.ruleset.get_defense_value(PieceType.TOWER),
+                'strong_tower': game_state.ruleset.get_defense_value(PieceType.STRONG_TOWER),
+                'farm': None,
+            }
+        
+        # Get province color
+        province_color_value = None
+        if province:
+            province_color = province.get_color()
+            if province_color:
+                province_color_value = province_color.value if hasattr(province_color, 'value') else str(province_color)
+        
+        return jsonify({
+            'success': True,
+            'province_id': province.get_id(),
+            'money': province.get_money(),
+            'income': income,
+            'consumption': consumption,
+            'profit': profit,
+            'city_name': province.get_name() if hasattr(province, 'get_name') else '',
+            'piece_costs': piece_costs,
+            'piece_maintenance': piece_maintenance,
+            'piece_strength': piece_strength,
+            'province_color': province_color_value
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/unit_tests/build', methods=['POST'])
+def api_unit_tests_build():
+    """Build a piece in edit mode (free, no cost validation)."""
+    try:
+        session_id = session.get('session_id')
+        if not session_id or session_id not in game_sessions:
+            # Try to find session as fallback
+            for sid, data in game_sessions.items():
+                session_id = sid
+                session['session_id'] = sid
+                session.modified = True
+                break
+            if not session_id or session_id not in game_sessions:
+                return jsonify({'success': False, 'error': 'No active test session'}), 404
+        
+        session_data = game_sessions[session_id]
+        game_state = session_data.get('game_state')
+        
+        if not game_state:
+            return jsonify({'success': False, 'error': 'Game state not available'}), 500
+        
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'No data provided'}), 400
+        
+        # Get parameters
+        try:
+            coordinate1 = int(data.get('coordinate1'))
+            coordinate2 = int(data.get('coordinate2'))
+            piece_type_str = data.get('piece_type')
+            province_coord1 = data.get('province_coordinate1')
+            province_coord2 = data.get('province_coordinate2')
+        except (ValueError, TypeError) as e:
+            return jsonify({'success': False, 'error': f'Invalid parameters: {e}'}), 400
+        
+        if not piece_type_str:
+            return jsonify({'success': False, 'error': 'piece_type is required'}), 400
+        
+        # Convert piece type string to enum
+        from core.enums import PieceType, EventType
+        try:
+            piece_type = PieceType(piece_type_str.lower())
+        except ValueError:
+            return jsonify({'success': False, 'error': f'Invalid piece type: {piece_type_str}'}), 400
+        
+        # Get the target hex
+        hex_obj = game_state.get_hex(coordinate1, coordinate2)
+        if not hex_obj:
+            return jsonify({'success': False, 'error': 'Hex not found'}), 404
+        
+        province_hex = None
+        if province_coord1 is not None and province_coord2 is not None:
+            try:
+                province_hex = game_state.get_hex(int(province_coord1), int(province_coord2))
+            except (ValueError, TypeError):
+                pass
+        
+        # In edit mode, we allow building for any province
+        # Get province from hex or province_hex
+        if not province_hex:
+            province_hex = hex_obj
+        
+        # Create build command
+        from commands.types import BuildPieceCommand
+        from commands.executor import CommandExecutor
+        
+        command = BuildPieceCommand(
+            hex=hex_obj,
+            piece_type=piece_type,
+            province_hex=province_hex
+        )
+        
+        # In edit mode, bypass validation entirely and call executor's internal method directly
+        # This allows building for any province without ownership/turn/cost restrictions
+        executor = CommandExecutor(game_state)
+        
+        # Get province for the build
+        province = province_hex.get_province() if province_hex else hex_obj.get_province()
+        if not province:
+            province = game_state.provinces_manager.find_province_slowly(hex_obj)
+        
+        if not province:
+            return jsonify({'success': False, 'error': 'Province not found'}), 400
+        
+        # Temporarily set province money to a high value (executor doesn't check money, but just in case)
+        original_money = None
+        if province:
+            original_money = province.get_money()
+            province.set_money(999999)
+        
+        # If building a city, remove any existing cities from the province first
+        # (provinces can only have one city)
+        if piece_type == PieceType.CITY:
+            city_hexes = [hex for hex in province.get_hexes() if hex.piece == PieceType.CITY]
+            # Remove all existing cities except the one we're building on (if it's already a city)
+            for city_hex in city_hexes:
+                if city_hex != hex_obj:  # Don't remove the hex we're building on
+                    # Delete the existing city
+                    delete_event = game_state.events_manager.factory.create_event(EventType.PIECE_DELETE)
+                    from core.events import EventPieceDelete
+                    if isinstance(delete_event, EventPieceDelete):
+                        delete_event.set_hex(city_hex)
+                        try:
+                            game_state.events_manager.apply_event(delete_event)
+                        except Exception as e:
+                            print(f"Warning: Failed to remove existing city: {e}")
+        
+        try:
+            # In edit mode, directly call the executor's internal method to bypass all validation
+            # This skips ownership checks, turn checks, and cost checks
+            success, error = executor._execute_build_piece(command)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return jsonify({'success': False, 'error': f'Exception during build: {str(e)}'}), 500
+        finally:
+            # Restore original money
+            if province and original_money is not None:
+                province.set_money(original_money)
+        
+        if success:
+            # Update session state
+            session_data['game_state'] = game_state
+            
+            return jsonify({
+                'success': True,
+                'message': f'Built {piece_type.value} successfully'
+            })
+        else:
+            # Log the error for debugging
+            print(f"Build failed in edit mode: {error}")
+            print(f"  Hex: ({coordinate1}, {coordinate2}), Piece type: {piece_type_str}")
+            print(f"  Hex has piece: {hex_obj.piece}")
+            print(f"  Province: {province}")
+            return jsonify({'success': False, 'error': error or 'Build failed'}), 400
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/unit_tests/build_land', methods=['POST'])
+def api_unit_tests_build_land():
+    """Build/change land in edit mode (black hex, gray hex, or color hex)."""
+    try:
+        session_id = session.get('session_id')
+        if not session_id or session_id not in game_sessions:
+            # Try to find session by test name as fallback
+            for sid, data in game_sessions.items():
+                if data.get('test_name'):
+                    session['session_id'] = sid
+                    session_id = sid
+                    session.modified = True
+                    break
+            if not session_id or session_id not in game_sessions:
+                return jsonify({'success': False, 'error': 'No active test session'}), 404
+        
+        session_data = game_sessions[session_id]
+        game_state = session_data.get('game_state')
+        
+        if not game_state:
+            return jsonify({'success': False, 'error': 'Game state not available'}), 500
+        
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'No data provided'}), 400
+        
+        # Get parameters
+        try:
+            coordinate1 = int(data.get('coordinate1'))
+            coordinate2 = int(data.get('coordinate2'))
+            color_str = data.get('color')
+        except (ValueError, TypeError) as e:
+            return jsonify({'success': False, 'error': f'Invalid parameters: {e}'}), 400
+        
+        if not color_str:
+            return jsonify({'success': False, 'error': 'color is required'}), 400
+        
+        # Get the hex
+        hex_obj = game_state.get_hex(coordinate1, coordinate2)
+        is_black_hex = (hex_obj is None)  # Black hexes don't exist in game_state.hexes
+        
+        from core.enums import HColor, EventType
+        
+        if color_str == 'black':
+            # Remove hex from game state (make it black)
+            if not hex_obj:
+                return jsonify({'success': False, 'error': 'Hex not found'}), 404
+            
+            # Remove piece if any
+            if hex_obj.piece:
+                delete_event = game_state.events_manager.factory.create_event(EventType.PIECE_DELETE)
+                from core.events import EventPieceDelete
+                if isinstance(delete_event, EventPieceDelete):
+                    delete_event.set_hex(hex_obj)
+                    game_state.events_manager.apply_event(delete_event)
+            
+            # Remove hex from game state
+            if hex_obj in game_state.hexes:
+                game_state.hexes.remove(hex_obj)
+                # Remove from adjacency lists
+                for adj_hex in hex_obj.adjacent_hexes[:]:
+                    if adj_hex in adj_hex.adjacent_hexes:
+                        adj_hex.adjacent_hexes.remove(hex_obj)
+                    hex_obj.adjacent_hexes.remove(adj_hex)
+            
+        elif color_str == 'gray':
+            # Make hex gray (neutral)
+            if is_black_hex:
+                # Add hex to game state as gray
+                from core.hex import Hex
+                hex_obj = Hex(coordinate1, coordinate2, HColor.GRAY)
+                game_state.hexes.append(hex_obj)
+                # Rebuild adjacency graph
+                from save_load.decoder import _build_adjacency_graph
+                _build_adjacency_graph(game_state)
+            else:
+                # Change existing hex to gray
+                previous_color = hex_obj.color
+                change_color_event = game_state.events_manager.factory.create_event(EventType.HEX_CHANGE_COLOR)
+                from core.events import EventHexChangeColor
+                if isinstance(change_color_event, EventHexChangeColor):
+                    change_color_event.set_hex(hex_obj)
+                    change_color_event.set_color(HColor.GRAY)
+                    # Store previous color for province manager
+                    game_state.provinces_manager._previous_color = previous_color
+                    game_state.events_manager.apply_event(change_color_event)
+        
+        else:
+            # Change hex to a player color
+            try:
+                target_color = HColor(color_str.lower())
+            except ValueError:
+                return jsonify({'success': False, 'error': f'Invalid color: {color_str}'}), 400
+            
+            if is_black_hex:
+                # Add hex to game state with target color
+                from core.hex import Hex
+                hex_obj = Hex(coordinate1, coordinate2, target_color)
+                game_state.hexes.append(hex_obj)
+                # Rebuild adjacency graph
+                from save_load.decoder import _build_adjacency_graph
+                _build_adjacency_graph(game_state)
+                # Add to province
+                game_state.provinces_manager._enlarge_province_for_hex(hex_obj)
+            else:
+                # Change existing hex color
+                previous_color = hex_obj.color
+                if previous_color == target_color:
+                    return jsonify({'success': True, 'message': 'Hex already has this color'})
+                
+                # Check if hex has neighbor of target color
+                has_target_color_neighbor = False
+                for adj_hex in hex_obj.adjacent_hexes:
+                    if adj_hex.color == target_color:
+                        has_target_color_neighbor = True
+                        break
+                
+                if not has_target_color_neighbor:
+                    return jsonify({'success': False, 'error': 'Hex must be adjacent to a hex of the target color'}), 400
+                
+                change_color_event = game_state.events_manager.factory.create_event(EventType.HEX_CHANGE_COLOR)
+                from core.events import EventHexChangeColor
+                if isinstance(change_color_event, EventHexChangeColor):
+                    change_color_event.set_hex(hex_obj)
+                    change_color_event.set_color(target_color)
+                    # Store previous color for province manager
+                    game_state.provinces_manager._previous_color = previous_color
+                    game_state.events_manager.apply_event(change_color_event)
+        
+        # Update session state
+        session_data['game_state'] = game_state
+        
+        return jsonify({
+            'success': True,
+            'message': f'Land changed to {color_str} successfully'
+        })
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/unit_tests/set_hex_piece', methods=['POST'])
+def api_unit_tests_set_hex_piece():
+    """Set or clear piece on a hex in edit mode (tree menu: clear, pine, palm)."""
+    try:
+        session_id = session.get('session_id')
+        if not session_id or session_id not in game_sessions:
+            for sid, data in game_sessions.items():
+                if data.get('test_name'):
+                    session['session_id'] = sid
+                    session_id = sid
+                    session.modified = True
+                    break
+            if not session_id or session_id not in game_sessions:
+                return jsonify({'success': False, 'error': 'No active test session'}), 404
+
+        session_data = game_sessions[session_id]
+        game_state = session_data.get('game_state')
+        if not game_state:
+            return jsonify({'success': False, 'error': 'Game state not available'}), 500
+
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'No data provided'}), 400
+
+        try:
+            coordinate1 = int(data.get('coordinate1'))
+            coordinate2 = int(data.get('coordinate2'))
+            piece_str = (data.get('piece') or '').strip().lower()
+        except (ValueError, TypeError) as e:
+            return jsonify({'success': False, 'error': f'Invalid parameters: {e}'}), 400
+
+        if piece_str not in ('clear', 'pine', 'palm'):
+            return jsonify({'success': False, 'error': 'piece must be clear, pine, or palm'}), 400
+
+        hex_obj = game_state.get_hex(coordinate1, coordinate2)
+        if not hex_obj:
+            return jsonify({'success': False, 'error': 'Hex not found'}), 404
+
+        from core.enums import EventType, PieceType
+        from core.events import EventPieceDelete
+
+        if piece_str == 'clear':
+            if hex_obj.piece:
+                delete_event = game_state.events_manager.factory.create_event(EventType.PIECE_DELETE)
+                if isinstance(delete_event, EventPieceDelete):
+                    delete_event.set_hex(hex_obj)
+                    game_state.events_manager.apply_event(delete_event)
+            session_data['game_state'] = game_state
+            return jsonify({'success': True, 'message': 'Hex cleared'})
+
+        if piece_str == 'pine':
+            if hex_obj.piece and hex_obj.piece != PieceType.PALM:
+                return jsonify({'success': False, 'error': 'Pine can only replace empty hex or palm'}), 400
+            hex_obj.set_piece(PieceType.PINE)
+            hex_obj.unit_id = -1
+        elif piece_str == 'palm':
+            if hex_obj.piece and hex_obj.piece != PieceType.PINE:
+                return jsonify({'success': False, 'error': 'Palm can only replace empty hex or pine'}), 400
+            hex_obj.set_piece(PieceType.PALM)
+            hex_obj.unit_id = -1
+
+        session_data['game_state'] = game_state
+        return jsonify({'success': True, 'message': f'Hex set to {piece_str}'})
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+def _serialize_game_state_for_test(game_state):
+    """Serialize game state for visual test display."""
+    # Get all hexes (no fog of war for tests)
+    hexes = []
+    for hex in game_state.hexes:
+        hex_data = {
+            'coordinate1': hex.coordinate1,
+            'coordinate2': hex.coordinate2,
+            'color': hex.color.value if hasattr(hex.color, 'value') else str(hex.color),
+            'piece': hex.piece.value if hex.piece and hasattr(hex.piece, 'value') else None,
+            'unit_id': hex.unit_id,
+            'is_ready': False  # Tests don't need readiness info
+        }
+        hexes.append(hex_data)
+    
+    # Serialize player entities
+    entities = []
+    if hasattr(game_state, 'entities_manager') and game_state.entities_manager:
+        if hasattr(game_state.entities_manager, 'entities') and game_state.entities_manager.entities:
+            for entity in game_state.entities_manager.entities:
+                entity_data = {
+                    'type': entity.type.value if hasattr(entity.type, 'value') else str(entity.type),
+                    'color': entity.color.value if hasattr(entity.color, 'value') else str(entity.color),
+                    'name': entity.name
+                }
+                entities.append(entity_data)
+    
+    # Get current turn info
+    current_color_value = None
+    if hasattr(game_state, 'entities_manager') and game_state.entities_manager:
+        current_entity = game_state.entities_manager.get_current_entity()
+        if current_entity:
+            current_color_value = current_entity.color.value if hasattr(current_entity.color, 'value') else str(current_entity.color)
+    
+    # Get turn info
+    turn_index = 0
+    lap = 0
+    if hasattr(game_state, 'turns_manager') and game_state.turns_manager:
+        turn_index = game_state.turns_manager.turn_index
+        lap = game_state.turns_manager.lap
+    
+    return jsonify({
+        'success': True,
+        'hexes': hexes,
+        'entities': entities,
+        'current_color': current_color_value,
+        'turn_index': turn_index,
+        'lap': lap,
+        'owned_hex_percentage': 0.0,  # Not needed for tests
+        'event_history': [],  # Tests don't need event history
+        'event_history_encoded': ""
     })
 
 

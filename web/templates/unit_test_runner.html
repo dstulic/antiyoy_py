@@ -1,0 +1,1326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Runner - {{ test_name }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/game.css') }}">
+    <style>
+        .test-runner-container {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+        .test-controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 20px;
+            background: #2d3748;
+            border-bottom: 2px solid #4a5568;
+            flex-shrink: 0;
+        }
+        .test-controls button {
+            padding: 8px 16px;
+            background: #4a5568;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+        .test-controls button:hover:not(:disabled) {
+            background: #63b3ed;
+        }
+        .test-controls button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .test-name-label {
+            color: #e2e8f0;
+            font-size: 16px;
+            font-weight: bold;
+        }
+        .test-name-result-wrapper {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+        }
+        .test-result-label {
+            font-size: 14px;
+            font-weight: 600;
+            min-width: 3em;
+        }
+        .test-result-label.pass {
+            color: #68d391;
+        }
+        .test-result-label.fail {
+            color: #fc8181;
+        }
+        .game-container {
+            flex: 1;
+            overflow: hidden;
+            position: relative;
+        }
+        /* Status bar and actions bar - hidden by default, shown in edit mode */
+        #editStatusBar, #editActionsBar {
+            display: none;
+            position: relative !important; /* Override fixed positioning from game.css */
+            top: auto !important;
+            left: auto !important;
+            right: auto !important;
+            z-index: 10;
+            flex-shrink: 0;
+        }
+        .edit-mode #editStatusBar, .edit-mode #editActionsBar {
+            display: flex;
+        }
+        /* Game board should fill remaining space and have no margin */
+        /* Override game.css styles for test runner */
+        #testGameBoard.game-board {
+            width: 100%;
+            position: relative;
+            overflow: hidden;
+            background: #1a1a2e;
+            margin-top: 0 !important; /* Remove margin from game.css */
+        }
+        /* In edit mode, account for test controls + status bar + actions bar */
+        .edit-mode #testGameBoard {
+            height: calc(100vh - 50px - 70px - 60px); /* 50px status + 70px actions + ~60px test controls */
+        }
+        /* When not in edit mode, account for test controls only */
+        .test-runner-container:not(.edit-mode) #testGameBoard {
+            height: calc(100vh - 60px); /* ~60px for test controls */
+        }
+        /* Override build-menu-inline to use flex-start layout (left-aligned) */
+        #editBuildMenu.build-menu-inline {
+            justify-content: flex-start !important;
+            align-items: center;
+        }
+        /* Land and piece build menus */
+        .land-build-menu, .piece-build-menu {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-shrink: 0;
+        }
+        .land-build-menu {
+            border-right: 2px solid rgba(255, 255, 255, 0.2);
+            padding-right: 10px;
+            margin-right: 10px;
+        }
+        .tree-build-menu {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-shrink: 0;
+            border-right: 2px solid rgba(255, 255, 255, 0.2);
+            padding-right: 10px;
+            margin-right: 10px;
+        }
+        .tree-build-menu .tree-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 36px;
+            height: 36px;
+            padding: 4px;
+            background: rgba(255, 255, 255, 0.15);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 18px;
+        }
+        .tree-build-menu .tree-btn:hover:not(.disabled) {
+            background: rgba(255, 255, 255, 0.25);
+        }
+        .tree-build-menu .tree-btn.disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .tree-build-menu .tree-btn img {
+            max-width: 28px;
+            max-height: 28px;
+        }
+        .piece-build-menu {
+            /* Allow it to be empty without affecting layout */
+            min-width: 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="test-runner-container" id="testRunnerContainer">
+        <div class="test-controls">
+            <button id="homeBtn" onclick="goHome()">Home</button>
+            <button id="backBtn" onclick="goBack()" disabled>← Back</button>
+            <button id="resetBtn" onclick="resetTest()">Reset</button>
+            <button id="playBtn" onclick="runTest()">Play</button>
+            <button id="forwardBtn" onclick="goForward()" disabled>Forward →</button>
+            <button id="editBtn" onclick="enterEditMode()">Edit</button>
+            <button id="saveBtn" onclick="saveMap()" disabled style="display: none;">Save</button>
+            <div class="test-name-result-wrapper">
+                <div class="test-name-label" id="testNameLabel">{{ test_name }}</div>
+                <span id="testResultLabel" class="test-result-label"></span>
+            </div>
+        </div>
+        
+        <!-- Status Bar (shown only in edit mode) -->
+        <div class="status-bar" id="editStatusBar">
+            <div class="status-items-container">
+                <div class="status-item">
+                    <span class="status-label">Hex:</span>
+                    <span class="status-value" id="editStatusCoordinates">-</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label" id="editStatusCityName">Edit Mode</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Funds:</span>
+                    <span class="status-value" id="editStatusFunds">-</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Profit:</span>
+                    <span class="status-value" id="editStatusProfit">-</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Owned:</span>
+                    <span class="status-value" id="editStatusOwnedHex">-</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Turn:</span>
+                    <span class="status-value" id="editStatusTurn">-</span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Actions Bar (shown only in edit mode) -->
+        <div class="actions-bar" id="editActionsBar">
+            <button class="action-button" id="editUndoBtn" onclick="editUndoAction()" title="Undo" style="display: none;">
+                <span class="action-icon">↶</span>
+            </button>
+            <div class="build-menu-inline" id="editBuildMenu" style="display: none;">
+                <div class="land-build-menu" id="editLandBuildMenu">
+                    <!-- Land build buttons will be populated here -->
+                </div>
+                <div class="tree-build-menu" id="editTreeBuildMenu">
+                    <!-- Tree build buttons will be populated here -->
+                </div>
+                <div class="piece-build-menu" id="editPieceBuildMenu">
+                    <!-- Piece build items will be populated here -->
+                </div>
+            </div>
+            <button class="action-button" id="editEndTurnBtn" onclick="editEndTurn()" title="End Turn" style="display: none;">
+                <span class="action-icon">→</span>
+            </button>
+        </div>
+        
+        <div class="game-container">
+            <div id="testGameBoard" class="game-board"></div>
+        </div>
+    </div>
+    
+    <script src="{{ url_for('static', filename='js/hex_grid.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/animations.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/game_board.js') }}"></script>
+    <script>
+        // Utility functions needed by game_board.js
+        // These are normally defined in game.js, but we don't load that file for test runner
+        function isUnitPiece(piece) {
+            if (!piece) return false;
+            // Piece values come from the backend as enum values (e.g., 'PEASANT', 'SPEARMAN')
+            // The original game.js checks for lowercase, but backend sends uppercase enum values
+            const pieceStr = String(piece).toLowerCase();
+            return pieceStr === 'peasant' || pieceStr === 'spearman' || 
+                   pieceStr === 'baron' || pieceStr === 'knight';
+        }
+    </script>
+    <script>
+        let currentTestName = '{{ test_name }}';
+        let allTests = [];
+        let currentTestIndex = -1;
+        let gameBoard = null;
+        let stateMode = 'initial'; // 'initial' or 'final'
+        let editMode = false; // Whether we're in edit mode
+        
+        // Initialize game board
+        window.addEventListener('load', () => {
+            // Initialize game board with container ID
+            gameBoard = new GameBoard('testGameBoard', 30, 1.0);
+            
+            // Load test list to enable navigation
+            loadTestList().then(() => {
+                // Initialize current test
+                initTest();
+            });
+        });
+        
+        async function loadTestList() {
+            try {
+                const response = await fetch('/api/unit_tests/list', {
+                    credentials: 'include'
+                });
+                const data = await response.json();
+                if (data.success) {
+                    allTests = data.tests.map(t => t.name);
+                    currentTestIndex = allTests.indexOf(currentTestName);
+                    updateNavigationButtons();
+                }
+            } catch (error) {
+                console.error('Error loading test list:', error);
+            }
+        }
+        
+        function updateNavigationButtons() {
+            const backBtn = document.getElementById('backBtn');
+            const forwardBtn = document.getElementById('forwardBtn');
+            
+            backBtn.disabled = currentTestIndex <= 0;
+            forwardBtn.disabled = currentTestIndex >= allTests.length - 1;
+        }
+        
+        function updateButtonStates() {
+            // Update button states based on edit mode
+            if (editMode) {
+                document.getElementById('homeBtn').disabled = true;
+                document.getElementById('backBtn').disabled = true;
+                document.getElementById('resetBtn').disabled = true;
+                document.getElementById('playBtn').disabled = true;
+                document.getElementById('forwardBtn').disabled = true;
+                document.getElementById('editBtn').disabled = true;
+            } else {
+                document.getElementById('homeBtn').disabled = false;
+                updateNavigationButtons();
+                document.getElementById('resetBtn').disabled = false;
+                document.getElementById('playBtn').disabled = false;
+                document.getElementById('editBtn').disabled = false;
+            }
+        }
+        
+        async function initTest() {
+            try {
+                console.log('Initializing test:', currentTestName);
+                const response = await fetch(`/api/unit_tests/init/${encodeURIComponent(currentTestName)}`, {
+                    credentials: 'include'
+                });
+                const data = await response.json();
+                
+                console.log('Init response:', data);
+                console.log('Session ID from response:', data.session_id);
+                
+                if (data.success) {
+                    stateMode = 'initial';
+                    console.log('Loading game state with', data.hexes?.length || 0, 'hexes');
+                    loadGameState(data);
+                    setTestResultLabel('');
+                } else {
+                    console.error('Init failed:', data.error);
+                    alert('Error initializing test: ' + (data.error || 'Unknown error'));
+                }
+            } catch (error) {
+                console.error('Error initializing test:', error);
+                alert('Error initializing test: ' + error.message);
+            }
+        }
+        
+        async function resetTest() {
+            try {
+                const response = await fetch(`/api/unit_tests/reset/${encodeURIComponent(currentTestName)}`, {
+                    credentials: 'include'
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    stateMode = 'initial';
+                    loadGameState(data);
+                    setTestResultLabel('');
+                } else {
+                    alert('Error resetting test: ' + (data.error || 'Unknown error'));
+                }
+            } catch (error) {
+                alert('Error resetting test: ' + error.message);
+            }
+        }
+        
+        function setTestResultLabel(passOrFailOrEmpty) {
+            const el = document.getElementById('testResultLabel');
+            if (!el) return;
+            el.textContent = passOrFailOrEmpty;
+            el.classList.remove('pass', 'fail');
+            if (passOrFailOrEmpty === 'Pass') el.classList.add('pass');
+            if (passOrFailOrEmpty === 'Fail') el.classList.add('fail');
+        }
+
+        async function runTest() {
+            try {
+                const response = await fetch(`/api/unit_tests/run/${encodeURIComponent(currentTestName)}`, {
+                    credentials: 'include'
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    stateMode = 'final';
+                    loadGameState(data);
+                    setTestResultLabel('Pass');
+                } else {
+                    setTestResultLabel('Fail');
+                    alert('Error running test: ' + (data.error || 'Unknown error'));
+                }
+            } catch (error) {
+                setTestResultLabel('Fail');
+                alert('Error running test: ' + error.message);
+            }
+        }
+        
+        function loadGameState(data) {
+            console.log('loadGameState called with', data.hexes?.length || 0, 'hexes');
+            if (data.hexes && gameBoard) {
+                console.log('Setting hexes on game board');
+                gameBoard.setHexes(data.hexes);
+                if (data.current_color) {
+                    gameBoard.setCurrentPlayerColor(data.current_color);
+                }
+                // In edit mode, clear currentPlayerColor to allow selecting any hex
+                if (editMode && gameBoard) {
+                    gameBoard.currentPlayerColor = null;
+                }
+                // Resize canvas to fit container
+                gameBoard.resize();
+                // Render the board (will automatically draw placeholder hexes if in edit mode)
+                gameBoard.render();
+                console.log('Game state loaded and rendered');
+            } else {
+                console.warn('Cannot load game state:', {
+                    hasHexes: !!data.hexes,
+                    hasGameBoard: !!gameBoard,
+                    hexCount: data.hexes?.length || 0
+                });
+            }
+        }
+        
+        function goHome() {
+            window.location.href = '/unit_tests';
+        }
+        
+        function goBack() {
+            if (currentTestIndex > 0) {
+                const prevTest = allTests[currentTestIndex - 1];
+                window.location.href = `/unit_tests/run/${encodeURIComponent(prevTest)}`;
+            }
+        }
+        
+        function goForward() {
+            if (currentTestIndex < allTests.length - 1) {
+                const nextTest = allTests[currentTestIndex + 1];
+                window.location.href = `/unit_tests/run/${encodeURIComponent(nextTest)}`;
+            }
+        }
+        
+        async function enterEditMode() {
+            if (editMode) return; // Already in edit mode
+            
+            editMode = true;
+            updateButtonStates();
+            
+            // Add edit-mode class to container to show status/actions bars
+            document.getElementById('testRunnerContainer').classList.add('edit-mode');
+            
+            // Show and enable save button
+            const saveBtn = document.getElementById('saveBtn');
+            saveBtn.style.display = 'inline-block';
+            saveBtn.disabled = false;
+            
+            // Reset to base state
+            await resetTest();
+            
+            // Clear currentPlayerColor in edit mode to allow selecting any hex
+            if (gameBoard) {
+                gameBoard.currentPlayerColor = null;
+                
+                // Override render method to always draw placeholder hexes in edit mode
+                if (!gameBoard._originalRender) {
+                    gameBoard._originalRender = gameBoard.render.bind(gameBoard);
+                }
+                gameBoard.render = function() {
+                    // Call original render
+                    gameBoard._originalRender();
+                    // Draw placeholder hexes after rendering
+                    if (editMode) {
+                        drawPlaceholderHex();
+                    }
+                };
+                
+                gameBoard.render();
+            }
+            
+            // Set up edit mode click handler
+            if (gameBoard) {
+                setupEditModeClickHandler();
+            }
+            
+            // Update status bar
+            updateEditStatusBar();
+            
+            // Update status bar when hex is clicked
+            if (gameBoard) {
+                const originalOnHexClick = gameBoard.onHexClick;
+                gameBoard.onHexClick = function(hex) {
+                    if (originalOnHexClick) originalOnHexClick(hex);
+                    // Update status bar with province info
+                    fetch(`/api/unit_tests/province/${hex.coordinate1}/${hex.coordinate2}`, {
+                        credentials: 'include'
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success && data.province_id) {
+                            const statusCityName = document.getElementById('editStatusCityName');
+                            const statusFunds = document.getElementById('editStatusFunds');
+                            const statusProfit = document.getElementById('editStatusProfit');
+                            
+                            if (statusCityName) {
+                                statusCityName.textContent = data.city_name || 'Edit Mode';
+                            }
+                            if (statusFunds) {
+                                statusFunds.textContent = data.money || '0';
+                            }
+                            if (statusProfit) {
+                                statusProfit.textContent = data.profit || '0';
+                                statusProfit.className = 'status-value ' + (data.profit >= 0 ? 'positive' : 'negative');
+                            }
+                        }
+                    });
+                };
+            }
+        }
+        
+        function setupEditModeClickHandler() {
+            if (!gameBoard) return;
+            
+            // Save original click handler
+            if (!gameBoard._originalHandleClick) {
+                gameBoard._originalHandleClick = gameBoard.handleClick.bind(gameBoard);
+            }
+            
+            // Override the click handler to allow clicking on any hex in edit mode
+            gameBoard.handleClick = function(e) {
+                // Handle middle mouse button for recentering (from original handler)
+                if (e.button === 1) {
+                    e.preventDefault();
+                    const rect = this.canvas.getBoundingClientRect();
+                    const x = e.clientX - rect.left;
+                    const y = e.clientY - rect.top;
+                    
+                    const worldX = (x - this.offsetX) / this.scale;
+                    const worldY = (y - this.offsetY) / this.scale;
+                    
+                    this.offsetX = this.canvas.width / 2 - worldX * this.scale;
+                    this.offsetY = this.canvas.height / 2 - worldY * this.scale;
+                    
+                    this.render();
+                    return;
+                }
+                
+                // In edit mode, allow clicking on any hex
+                const rect = this.canvas.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                
+                const worldX = (x - this.offsetX) / this.scale;
+                const worldY = (y - this.offsetY) / this.scale;
+                const effectiveHexSize = this.hexSize * this.spacingMultiplier;
+                const hexCoords = pixelToHex(worldX, worldY, effectiveHexSize);
+                
+                const hex = this.hexes.find(h => 
+                    h.coordinate1 === hexCoords.q && 
+                    h.coordinate2 === hexCoords.r
+                );
+                
+                if (hex) {
+                    // Select hex and show build menu for any province
+                    this.selectedHex = hex;
+                    this.selectedHexForBuild = hex;
+                    this.selectedBorderHex = null; // Clear border hex selection
+                    this.render();
+                    
+                    // Update coordinates in status bar
+                    const coordsElement = document.getElementById('editStatusCoordinates');
+                    if (coordsElement) {
+                        coordsElement.textContent = `${hex.coordinate1}, ${hex.coordinate2}`;
+                    }
+                    
+                    // Show build menu for this hex (for any province in edit mode)
+                    populateEditBuildMenu(hex);
+                    
+                    // Call onHexClick callback if set
+                    if (this.onHexClick) {
+                        this.onHexClick(hex);
+                    }
+                } else {
+                    // Check if it's a black border hex
+                    if (this.borderHexes) {
+                        const borderHex = this.borderHexes.find(bh => 
+                            bh.coordinate1 === hexCoords.q && 
+                            bh.coordinate2 === hexCoords.r
+                        );
+                        
+                        if (borderHex) {
+                            // Select border hex
+                            this.selectedBorderHex = borderHex;
+                            this.selectedHex = null; // Clear real hex selection
+                            this.selectedHexForBuild = null;
+                            this.render();
+                            
+                            // Update coordinates in status bar
+                            const coordsElement = document.getElementById('editStatusCoordinates');
+                            if (coordsElement) {
+                                coordsElement.textContent = `${borderHex.coordinate1}, ${borderHex.coordinate2}`;
+                            }
+                            
+                            // Show build menu for border hexes (land menu only)
+                            populateEditBuildMenu(borderHex);
+                        } else {
+                            // Clicked on empty space - hide build menu
+                            const buildMenu = document.getElementById('editBuildMenu');
+                            if (buildMenu) {
+                                buildMenu.style.display = 'none';
+                            }
+                        }
+                    } else {
+                        // Clicked on empty space - hide build menu
+                        const buildMenu = document.getElementById('editBuildMenu');
+                        if (buildMenu) {
+                            buildMenu.style.display = 'none';
+                        }
+                    }
+                }
+            };
+        }
+        
+        function populateEditBuildMenu(hex) {
+            const buildMenu = document.getElementById('editBuildMenu');
+            const landMenu = document.getElementById('editLandBuildMenu');
+            const treeMenu = document.getElementById('editTreeBuildMenu');
+            const pieceMenu = document.getElementById('editPieceBuildMenu');
+            
+            if (!buildMenu || !landMenu || !treeMenu || !pieceMenu) {
+                console.error('populateEditBuildMenu: Build menu elements not found');
+                return;
+            }
+            
+            console.log('populateEditBuildMenu: Fetching province data for hex:', hex.coordinate1, hex.coordinate2);
+            landMenu.innerHTML = '';
+            treeMenu.innerHTML = '';
+            pieceMenu.innerHTML = '';
+            
+            // Check if hex is black (border hex)
+            const isBlackHex = gameBoard.borderHexes && gameBoard.borderHexes.some(bh => 
+                bh.coordinate1 === hex.coordinate1 && bh.coordinate2 === hex.coordinate2
+            );
+            
+            // Always show build menu for land buttons
+            buildMenu.style.display = 'flex';
+            
+            // Populate land build buttons
+            populateLandBuildMenu(hex, isBlackHex);
+            
+            // Populate tree build menu only for real hexes (not border)
+            if (!isBlackHex) {
+                populateTreeBuildMenu(hex);
+            }
+            
+            // Only fetch province data for piece menu if not a black hex
+            if (!isBlackHex) {
+                fetch(`/api/unit_tests/province/${hex.coordinate1}/${hex.coordinate2}`, {
+                    credentials: 'include'
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        console.log('populateEditBuildMenu: Province data received:', data);
+                        if (!data.success) {
+                            console.warn('populateEditBuildMenu: Request failed:', data.error);
+                            return;
+                        }
+                        
+                        // Check if province exists (province_id can be 0, so check if it's null/undefined or -1)
+                        // -1 means province ID not set, null/undefined means no province
+                        if (data.province_id === null || data.province_id === undefined || data.province_id === -1) {
+                            console.warn('populateEditBuildMenu: No province found for hex. province_id:', data.province_id);
+                            return;
+                        }
+                        
+                        console.log('populateEditBuildMenu: Showing piece menu for province:', data.province_id);
+                        
+                        // In edit mode, all items are free (cost = 0), and strength is not important
+                        const items = [
+                            { type: 'city', name: 'City', cost: 0, maintenance: 0, strength: null },
+                            { type: 'farm', name: 'Farm', cost: 0, maintenance: 0, strength: null },
+                            { type: 'tower', name: 'Tower', cost: 0, maintenance: 0, strength: null },
+                            { type: 'strong_tower', name: 'Strong Tower', cost: 0, maintenance: 0, strength: null },
+                            { type: 'peasant', name: 'Peasant', cost: 0, maintenance: 0, strength: null },
+                            { type: 'spearman', name: 'Spearman', cost: 0, maintenance: 0, strength: null },
+                            { type: 'baron', name: 'Baron', cost: 0, maintenance: 0, strength: null },
+                            { type: 'knight', name: 'Knight', cost: 0, maintenance: 0, strength: null }
+                        ];
+                        
+                        items.forEach(itemData => {
+                            const buildItem = createEditBuildItem(itemData.type, itemData.name, itemData.cost, itemData.maintenance, itemData.strength, true);
+                            pieceMenu.appendChild(buildItem);
+                        });
+                    })
+                    .catch(error => {
+                        console.error('Error fetching province data for edit build menu:', error);
+                    });
+            }
+        }
+        
+        function populateLandBuildMenu(hex, isBlackHex) {
+            const landMenu = document.getElementById('editLandBuildMenu');
+            if (!landMenu) return;
+            
+            // Fetch game state to get player colors and check neighbors
+            fetch('/api/unit_tests/state', {
+                credentials: 'include'
+            })
+                .then(response => response.json())
+                .then(data => {
+                    if (!data.success) {
+                        console.error('Failed to get game state for land menu');
+                        return;
+                    }
+                    
+                    // Get all player colors from entities
+                    const playerColors = [];
+                    if (data.entities) {
+                        data.entities.forEach(entity => {
+                            if (entity.color && entity.color !== 'gray') {
+                                playerColors.push(entity.color);
+                            }
+                        });
+                    }
+                    
+                    // Always show black hex button (but disable if isBlackHex)
+                    const blackButton = createLandButton('black', 'Black', '#000000', !isBlackHex);
+                    if (!isBlackHex) {
+                        blackButton.onclick = () => handleLandBuild('black', hex);
+                    }
+                    landMenu.appendChild(blackButton);
+                    
+                    // Always show gray hex button (always enabled)
+                    const grayButton = createLandButton('gray', 'Gray', '#808080', true);
+                    grayButton.onclick = () => handleLandBuild('gray', hex);
+                    landMenu.appendChild(grayButton);
+                    
+                    // Always show all color buttons (but disable if isBlackHex or no neighbor of that color)
+                    playerColors.forEach(color => {
+                        // Check if hex has a neighbor of this color
+                        const hasNeighborOfColor = !isBlackHex && checkNeighborOfColor(hex, color, data.hexes);
+                        const colorButton = createLandButton(color, color.charAt(0).toUpperCase() + color.slice(1), getColorHex(color), hasNeighborOfColor);
+                        if (hasNeighborOfColor) {
+                            colorButton.onclick = () => handleLandBuild(color, hex);
+                        }
+                        landMenu.appendChild(colorButton);
+                    });
+                })
+                .catch(error => {
+                    console.error('Error fetching game state for land menu:', error);
+                });
+        }
+        
+        function checkNeighborOfColor(hex, targetColor, allHexes) {
+            if (!hex || !allHexes) return false;
+            
+            const neighborOffsets = [
+                [1, 0], [0, 1], [-1, 1], [-1, 0], [0, -1], [1, -1]
+            ];
+            
+            for (const [dq, dr] of neighborOffsets) {
+                const neighborQ = hex.coordinate1 + dq;
+                const neighborR = hex.coordinate2 + dr;
+                
+                const neighbor = allHexes.find(h => 
+                    h.coordinate1 === neighborQ && h.coordinate2 === neighborR
+                );
+                
+                if (neighbor && neighbor.color === targetColor) {
+                    return true; // Has a neighbor of the target color
+                }
+            }
+            
+            return false;
+        }
+        
+        function createLandButton(color, label, hexColor, enabled) {
+            const button = document.createElement('div');
+            button.className = 'build-item-inline land-button';
+            button.style.cssText = `
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                padding: 8px 12px;
+                background: rgba(255, 255, 255, 0.1);
+                border: 2px solid rgba(255, 255, 255, 0.3);
+                border-radius: 6px;
+                cursor: ${enabled ? 'pointer' : 'not-allowed'};
+                transition: all 0.2s ease;
+                min-width: 50px;
+                opacity: ${enabled ? '1' : '0.6'};
+            `;
+            
+            if (enabled) {
+                button.onmouseenter = function() {
+                    this.style.background = 'rgba(255, 255, 255, 0.2)';
+                    this.style.borderColor = 'rgba(255, 255, 255, 0.5)';
+                };
+                button.onmouseleave = function() {
+                    this.style.background = 'rgba(255, 255, 255, 0.1)';
+                    this.style.borderColor = 'rgba(255, 255, 255, 0.3)';
+                };
+            }
+            
+            // Create color swatch
+            const swatch = document.createElement('div');
+            swatch.style.cssText = `
+                width: 32px;
+                height: 32px;
+                background: ${hexColor};
+                border: 2px solid rgba(255, 255, 255, 0.5);
+                border-radius: 4px;
+                margin-bottom: 4px;
+            `;
+            button.appendChild(swatch);
+            
+            // Create label
+            const labelEl = document.createElement('div');
+            labelEl.style.cssText = 'color: white; font-size: 0.75em; font-weight: bold;';
+            labelEl.textContent = label;
+            button.appendChild(labelEl);
+            
+            return button;
+        }
+        
+        function getColorHex(colorName) {
+            const colorMap = {
+                'gray': '#808080',
+                'green': '#4CAF50',
+                'red': '#F44336',
+                'blue': '#2196F3',
+                'yellow': '#FFEB3B',
+                'cyan': '#00BCD4',
+                'aqua': '#00FFFF',
+                'white': '#FFFFFF',
+                'orange': '#FF9800',
+                'purple': '#9C27B0',
+                'rose': '#E91E63',
+                'mint': '#4CAF50',
+                'ice': '#B3E5FC',
+                'lavender': '#E1BEE7',
+                'brown': '#795548',
+                'brass': '#B5A642',
+                'algae': '#4CAF50',
+                'orchid': '#BA68C8',
+                'whiskey': '#D7A86E'
+            };
+            return colorMap[colorName.toLowerCase()] || '#808080';
+        }
+        
+        function populateTreeBuildMenu(hex) {
+            const treeMenu = document.getElementById('editTreeBuildMenu');
+            if (!treeMenu) return;
+            
+            const piece = hex.piece ? String(hex.piece).toLowerCase() : null;
+            const hasPiece = !!piece;
+            const isEmpty = !hasPiece;
+            const isPine = piece === 'pine';
+            const isPalm = piece === 'palm';
+            
+            // Clear: enabled when hex has any piece (including trees)
+            const clearBtn = document.createElement('button');
+            clearBtn.className = 'tree-btn' + (hasPiece ? '' : ' disabled');
+            clearBtn.title = 'Clear tree or any piece from hex';
+            clearBtn.textContent = '🗑';
+            clearBtn.type = 'button';
+            if (hasPiece) {
+                clearBtn.onclick = () => handleTreeBuild('clear', hex);
+            }
+            treeMenu.appendChild(clearBtn);
+            
+            // Pine: enabled when empty or has palm
+            const pineBtn = document.createElement('button');
+            pineBtn.className = 'tree-btn' + (isEmpty || isPalm ? '' : ' disabled');
+            pineBtn.title = 'Place pine (replaces empty or palm)';
+            pineBtn.type = 'button';
+            const pineImg = document.createElement('img');
+            pineImg.src = '/static/assets/original_game_assets/atlas/pine.png';
+            pineImg.alt = 'Pine';
+            pineBtn.appendChild(pineImg);
+            if (isEmpty || isPalm) {
+                pineBtn.onclick = () => handleTreeBuild('pine', hex);
+            }
+            treeMenu.appendChild(pineBtn);
+            
+            // Palm: enabled when empty or has pine
+            const palmBtn = document.createElement('button');
+            palmBtn.className = 'tree-btn' + (isEmpty || isPine ? '' : ' disabled');
+            palmBtn.title = 'Place palm (replaces empty or pine)';
+            palmBtn.type = 'button';
+            const palmImg = document.createElement('img');
+            palmImg.src = '/static/assets/original_game_assets/atlas/palm.png';
+            palmImg.alt = 'Palm';
+            palmBtn.appendChild(palmImg);
+            if (isEmpty || isPine) {
+                palmBtn.onclick = () => handleTreeBuild('palm', hex);
+            }
+            treeMenu.appendChild(palmBtn);
+        }
+        
+        function handleTreeBuild(piece, hex) {
+            console.log('Tree build:', piece, 'on hex', hex.coordinate1, hex.coordinate2);
+            
+            fetch('/api/unit_tests/set_hex_piece', {
+                method: 'POST',
+                credentials: 'include',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    coordinate1: hex.coordinate1,
+                    coordinate2: hex.coordinate2,
+                    piece: piece
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    fetch('/api/unit_tests/state', { credentials: 'include' })
+                        .then(response => response.json())
+                        .then(stateData => {
+                            if (stateData.success) {
+                                loadGameState(stateData);
+                                if (gameBoard && gameBoard.selectedHex) {
+                                    populateEditBuildMenu(gameBoard.selectedHex);
+                                }
+                                if (gameBoard) gameBoard.render();
+                            }
+                        });
+                } else {
+                    alert('Tree action failed: ' + (data.error || 'Unknown error'));
+                }
+            })
+            .catch(error => {
+                console.error('Error setting hex piece:', error);
+                alert('Error: ' + error.message);
+            });
+        }
+        
+        function handleLandBuild(color, hex) {
+            console.log('Building land:', color, 'on hex:', hex.coordinate1, hex.coordinate2);
+            
+            fetch('/api/unit_tests/build_land', {
+                method: 'POST',
+                credentials: 'include',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    coordinate1: hex.coordinate1,
+                    coordinate2: hex.coordinate2,
+                    color: color
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    console.log('Land build successful');
+                    // Reload game state to show the change
+                    fetch('/api/unit_tests/state', {
+                        credentials: 'include'
+                    })
+                    .then(response => response.json())
+                    .then(stateData => {
+                        if (stateData.success) {
+                            loadGameState(stateData);
+                            // Re-populate build menu if hex is still selected
+                            if (gameBoard && gameBoard.selectedHex) {
+                                populateEditBuildMenu(gameBoard.selectedHex);
+                            }
+                        }
+                    });
+                } else {
+                    alert('Land build failed: ' + (data.error || 'Unknown error'));
+                }
+            })
+            .catch(error => {
+                console.error('Error building land:', error);
+                alert('Error: ' + error.message);
+            });
+        }
+        
+        function createEditBuildItem(pieceType, displayName, cost, maintenance, strength, canAfford = true) {
+            const item = document.createElement('div');
+            item.className = 'build-item-inline';
+            if (!canAfford) {
+                item.classList.add('unaffordable');
+            }
+            item.setAttribute('data-name', displayName);
+            
+            // Only allow clicking if affordable
+            if (canAfford) {
+                item.onclick = () => handleEditBuildPiece(pieceType);
+            } else {
+                item.onclick = () => {
+                    console.log(`Cannot build ${displayName}`);
+                };
+                item.style.cursor = 'not-allowed';
+            }
+            
+            // Create icon with image (same as real game)
+            const icon = document.createElement('div');
+            icon.className = 'build-item-icon';
+            
+            const img = document.createElement('img');
+            const imageName = getPieceImage(pieceType);
+            if (imageName) {
+                img.src = `/static/assets/original_game_assets/atlas/${imageName}`;
+                img.alt = displayName;
+            } else {
+                // Fallback if image not found
+                icon.textContent = '?';
+                icon.style.color = 'white';
+                icon.style.fontSize = '1.5em';
+            }
+            icon.appendChild(img);
+            
+            // Strength on top-right (for units and towers only)
+            if (strength !== null && strength !== undefined && strength > 0) {
+                const strengthEl = document.createElement('div');
+                strengthEl.className = 'build-item-strength';
+                strengthEl.textContent = strength.toString();
+                item.appendChild(strengthEl);
+            }
+            
+            // In edit mode, we don't show cost/maintenance, but we keep the structure
+            // for consistency with the real game's build menu
+            
+            item.appendChild(icon);
+            
+            return item;
+        }
+        
+        function handleEditBuildPiece(pieceType) {
+            if (!gameBoard || !gameBoard.selectedHexForBuild) {
+                console.warn('No hex selected for building');
+                return;
+            }
+            
+            const hex = gameBoard.selectedHexForBuild;
+            console.log('Edit mode: Building', pieceType, 'on hex', hex);
+            
+            // Get province hex
+            const provinceHex = hex;
+            
+            // Send build command to backend (edit mode - free)
+            const buildData = {
+                coordinate1: hex.coordinate1,
+                coordinate2: hex.coordinate2,
+                piece_type: pieceType,
+                province_coordinate1: provinceHex.coordinate1,
+                province_coordinate2: provinceHex.coordinate2,
+                edit_mode: true  // Flag for edit mode
+            };
+            
+            fetch('/api/unit_tests/build', {
+                method: 'POST',
+                credentials: 'include',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(buildData)
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    console.log('Build successful in edit mode');
+                    // Reload game state to show the change
+                    fetch('/api/unit_tests/state', {
+                        credentials: 'include'
+                    })
+                    .then(response => response.json())
+                    .then(stateData => {
+                        if (stateData.success) {
+                            loadGameState(stateData);
+                            // Clear currentPlayerColor again after reload (in case it was set)
+                            if (gameBoard && editMode) {
+                                gameBoard.currentPlayerColor = null;
+                                gameBoard.render();
+                            }
+                            // Re-populate build menu
+                            populateEditBuildMenu(hex);
+                        }
+                    });
+                } else {
+                    alert('Build failed: ' + (data.error || 'Unknown error'));
+                }
+            })
+            .catch(error => {
+                console.error('Error building in edit mode:', error);
+                alert('Error: ' + error.message);
+            });
+        }
+        
+        function updateEditStatusBar() {
+            // Fetch current state to update status bar
+            fetch('/api/unit_tests/state', {
+                credentials: 'include'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    // Update status bar elements
+                    const statusOwnedHex = document.getElementById('editStatusOwnedHex');
+                    if (statusOwnedHex && data.owned_hex_percentage !== undefined) {
+                        statusOwnedHex.textContent = data.owned_hex_percentage.toFixed(1) + '%';
+                    }
+                    
+                    const statusTurn = document.getElementById('editStatusTurn');
+                    if (statusTurn && data.lap !== undefined) {
+                        statusTurn.textContent = (data.lap + 1).toString();
+                    }
+                    
+                    // For edit mode, we can show province info when a hex is selected
+                    // This will be updated when a hex is clicked
+                }
+            })
+            .catch(error => {
+                console.error('Error updating edit status bar:', error);
+            });
+        }
+        
+        function editUndoAction() {
+            // TODO: Implement undo for edit mode
+            console.log('Undo in edit mode (not implemented yet)');
+        }
+        
+        function editEndTurn() {
+            // TODO: Implement end turn for edit mode (if needed)
+            console.log('End turn in edit mode (not implemented yet)');
+        }
+        
+        async function saveMap() {
+            if (!editMode) return;
+            
+            try {
+                console.log('Saving map for test:', currentTestName);
+                const response = await fetch(`/api/unit_tests/save/${encodeURIComponent(currentTestName)}`, {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert('Map saved successfully!');
+                    // Exit edit mode
+                    exitEditMode();
+                    // Reset to show the new base state from the saved map
+                    await resetTest();
+                } else {
+                    alert('Error saving map: ' + (data.error || 'Unknown error'));
+                }
+            } catch (error) {
+                console.error('Error saving map:', error);
+                alert('Error saving map: ' + error.message);
+            }
+        }
+        
+        function drawPlaceholderHex() {
+            if (!gameBoard || !gameBoard.hexes || gameBoard.hexes.length === 0) return;
+            
+            // Create a Set of existing hex positions for fast lookup
+            const existingHexes = new Set();
+            for (const hex of gameBoard.hexes) {
+                existingHexes.add(`${hex.coordinate1},${hex.coordinate2}`);
+            }
+            
+            // Set to store border hex positions (to avoid duplicates)
+            // Store as array of objects with coordinates for click detection
+            const borderHexes = new Set();
+            const borderHexArray = []; // Store as array for click detection
+            
+            // The 6 neighbor offsets in axial coordinates
+            const neighborOffsets = [
+                [1, 0],   // direction 0
+                [0, 1],   // direction 1
+                [-1, 1],  // direction 2
+                [-1, 0],  // direction 3
+                [0, -1],  // direction 4
+                [1, -1]   // direction 5
+            ];
+            
+            // Iterate through all real hexes
+            for (const hex of gameBoard.hexes) {
+                // Check all 6 neighbor positions
+                for (const [dq, dr] of neighborOffsets) {
+                    const neighborQ = hex.coordinate1 + dq;
+                    const neighborR = hex.coordinate2 + dr;
+                    const neighborKey = `${neighborQ},${neighborR}`;
+                    
+                    // If this neighbor position doesn't have a real hex, add it to border
+                    if (!existingHexes.has(neighborKey)) {
+                        borderHexes.add(neighborKey);
+                        borderHexArray.push({ coordinate1: neighborQ, coordinate2: neighborR });
+                    }
+                }
+            }
+            
+            // Filter out border hexes that have no real hex neighbors
+            const filteredBorderHexes = new Set();
+            const filteredBorderHexArray = [];
+            
+            for (const borderKey of borderHexes) {
+                const [q, r] = borderKey.split(',').map(Number);
+                
+                // Check if this border hex has any real hex neighbors
+                let hasRealNeighbor = false;
+                for (const [dq, dr] of neighborOffsets) {
+                    const neighborQ = q + dq;
+                    const neighborR = r + dr;
+                    const neighborKey = `${neighborQ},${neighborR}`;
+                    if (existingHexes.has(neighborKey)) {
+                        hasRealNeighbor = true;
+                        break;
+                    }
+                }
+                
+                // Only include border hexes that have at least one real hex neighbor
+                if (hasRealNeighbor) {
+                    filteredBorderHexes.add(borderKey);
+                    filteredBorderHexArray.push({ coordinate1: q, coordinate2: r });
+                }
+            }
+            
+            // Store filtered border hexes for click detection
+            gameBoard.borderHexes = filteredBorderHexArray;
+            
+            // Draw all filtered border hexes as black
+            const ctx = gameBoard.ctx;
+            const radius = gameBoard.hexSize * gameBoard.scale;
+            const worldHexSize = gameBoard.hexSize * gameBoard.spacingMultiplier;
+            
+            ctx.save();
+            ctx.fillStyle = '#000000';
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 1;
+            
+            for (const borderKey of filteredBorderHexes) {
+                const [q, r] = borderKey.split(',').map(Number);
+                
+                // Calculate pixel position
+                const pos = hexToPixel(q, r, worldHexSize);
+                
+                // Apply zoom scale to position, then add offset
+                const x = (pos.x * gameBoard.scale) + gameBoard.offsetX;
+                const y = (pos.y * gameBoard.scale) + gameBoard.offsetY;
+                
+                // Skip if outside viewport (account for zoom)
+                const effectiveSize = gameBoard.hexSize * gameBoard.scale;
+                if (x < -effectiveSize || x > gameBoard.canvas.width + effectiveSize ||
+                    y < -effectiveSize || y > gameBoard.canvas.height + effectiveSize) {
+                    continue;
+                }
+                
+                // Draw hexagon (pointy-top orientation)
+                ctx.beginPath();
+                for (let i = 0; i < 6; i++) {
+                    const angle = (Math.PI / 3 * i) - (Math.PI / 2);
+                    const hx = x + radius * Math.cos(angle);
+                    const hy = y + radius * Math.sin(angle);
+                    if (i === 0) {
+                        ctx.moveTo(hx, hy);
+                    } else {
+                        ctx.lineTo(hx, hy);
+                    }
+                }
+                ctx.closePath();
+                
+                // Fill with black
+                ctx.fill();
+                
+                // Draw border
+                ctx.stroke();
+                
+                // Draw selection outline if this border hex is selected
+                if (gameBoard.selectedBorderHex && 
+                    gameBoard.selectedBorderHex.coordinate1 === q && 
+                    gameBoard.selectedBorderHex.coordinate2 === r) {
+                    // Draw yellow selection border
+                    ctx.save();
+                    ctx.strokeStyle = '#FFFF00';
+                    ctx.lineWidth = 3;
+                    ctx.beginPath();
+                    for (let i = 0; i < 6; i++) {
+                        const angle = (Math.PI / 3 * i) - (Math.PI / 2);
+                        const hx = x + radius * Math.cos(angle);
+                        const hy = y + radius * Math.sin(angle);
+                        if (i === 0) {
+                            ctx.moveTo(hx, hy);
+                        } else {
+                            ctx.lineTo(hx, hy);
+                        }
+                    }
+                    ctx.closePath();
+                    ctx.stroke();
+                    ctx.restore();
+                }
+            }
+            
+            ctx.restore();
+        }
+        
+        function exitEditMode() {
+            editMode = false;
+            updateButtonStates();
+            
+            // Remove edit-mode class to hide status/actions bars
+            document.getElementById('testRunnerContainer').classList.remove('edit-mode');
+            
+            // Hide save button
+            const saveBtn = document.getElementById('saveBtn');
+            saveBtn.style.display = 'none';
+            saveBtn.disabled = true;
+            
+            // Hide build menu
+            const buildMenu = document.getElementById('editBuildMenu');
+            if (buildMenu) {
+                buildMenu.style.display = 'none';
+            }
+            
+            // Restore original click handler
+            if (gameBoard && gameBoard._originalHandleClick) {
+                gameBoard.handleClick = gameBoard._originalHandleClick;
+                gameBoard._originalHandleClick = null;
+            }
+            
+            // Restore original render method
+            if (gameBoard && gameBoard._originalRender) {
+                gameBoard.render = gameBoard._originalRender;
+                gameBoard._originalRender = null;
+            }
+            
+            // Clear selection
+            if (gameBoard) {
+                gameBoard.selectedHex = null;
+                gameBoard.selectedHexForBuild = null;
+                gameBoard.selectedBorderHex = null;
+                gameBoard.borderHexes = null;
+                gameBoard.render();
+            }
+        }
+    </script>
+</body>
+</html>

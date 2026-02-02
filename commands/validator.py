@@ -205,10 +205,10 @@ class CommandValidator:
                         return False, "Cannot build unit on friendly static piece (city/tower)"
         else:
             # For static pieces (towers, farms), hex must be empty
-            # Exception: strong_tower can be built on tower
+            # Exception: strong_tower can be built on empty hex or on existing (weak) tower
             if command.piece_type == PieceType.STRONG_TOWER:
-                if command.hex.piece != PieceType.TOWER:
-                    return False, "Strong tower can only be built on existing tower"
+                if not command.hex.is_empty() and command.hex.piece != PieceType.TOWER:
+                    return False, "Strong tower can only be built on empty hex or on existing tower"
             else:
                 if not command.hex.is_empty():
                     return False, "Hex must be empty to build this piece"
