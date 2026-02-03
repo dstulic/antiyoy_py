@@ -273,6 +273,7 @@ class AiBalancerDefaultV1(AbstractAI):
                 continue
             defense_gain = self.predict_defense_gain_with_unit_move(hex, adj_hex)
             if defense_gain >= 3:
+                print(f"Pushing unit to better defense from {hex.coordinate1}, {hex.coordinate2} to {adj_hex.coordinate1}, {adj_hex.coordinate2} with defense gain {defense_gain}")
                 self.command_unit_move(hex, adj_hex)
                 break
     
@@ -822,59 +823,158 @@ class AiBalancerDefaultV1(AbstractAI):
         
         return best_hex
     
-    def move_afk_units(self) -> None:
-        """Move units that haven't moved (AFK units)."""
-        if self.is_difficulty_less_than(Difficulty.EXPERT):
-            return
-        
-        self.update_units_ready_to_move()
-        for hex in self.units_ready_to_move:
-            if not self.is_ready(hex):
-                continue
-            province = hex.get_province()
-            if not province:
-                continue
-            if len(province.get_hexes()) <= 20:
-                continue
-            self.move_afk_unit(province, hex)
-    
-    def emulate_mass_march_for_single_unit(self, hex, target_hex):
-        """
-        Try to move a single unit toward target using mass-march-style logic.
-        Returns True if a move was made, False to use fallback (move_afk_unit_quickly).
-        Not implemented: always returns False so fallback is used.
-        """
-        return False
+    def _get_trees_in_province(self, province) -> List:
+        """Return list of hexes in province that have a tree (PINE or PALM)."""
+        return [h for h in province.get_hexes() if h.piece in (PieceType.PINE, PieceType.PALM)]
 
-    def move_afk_unit(self, province, hex) -> None:
-        """Move an AFK unit to perimeter."""
-        target_hex = self.find_random_hex_in_perimeter(province)
-        if not target_hex:
+    def _get_reachable_with_marching_distances(self, unit_hex, limit: int = 999) -> dict:
+        """
+        Wave from unit_hex with given limit; return dict hex -> marching distance (steps from unit).
+        Uses same logic as update_move_zone_for_unit_construction (wave with limit).
+        """
+        mgr = self.get_move_zone_manager()
+        strength = self.get_strength(unit_hex.piece)
+        mgr.update(unit_hex, limit, strength)
+        return {h: limit - h.counter for h in mgr.hexes}
+
+    def _move_unit_one_step_toward_by_marching(self, unit_hex, target_hex) -> bool:
+        """
+        Move unit one step toward target_hex using marching distance.
+        Get valid steps from move zone; for each step, compute marching distance to target (wave from step).
+        Move to the first step that has the shortest distance to target.
+        """
+        mgr = self.get_move_zone_manager()
+        strength = self.get_strength(unit_hex.piece)
+        mgr.update_for_unit(unit_hex)
+        steps = list(mgr.hexes)
+        self.exclude_friendly_units_from_move_zone(steps)
+        self.exclude_friendly_buildings_from_move_zone(steps)
+        if not steps:
+            return False
+
+        # For each step, marching distance to target = wave from that step with limit 999; distance = 999 - target.counter if target reached
+        step_distances = []
+        for step in steps:
+            mgr.update(step, 999, strength)
+            if target_hex in mgr.hexes:
+                dist = 999 - target_hex.counter
+            else:
+                dist = 999999
+            step_distances.append((step, dist))
+
+        # First step with shortest distance to target
+        min_dist = min(d for _, d in step_distances)
+        if min_dist == 999999:
+            return False
+        best_step = next(step for step, d in step_distances if d == min_dist)
+        return self.command_unit_move(unit_hex, best_step)
+
+    def _find_closest_non_province_hex_by_marching(
+        self, unit_hex, province, reachable_dist: dict, enemy_distance_scale: float = 0.8
+    ):
+        """
+        Among hexes in reachable_dist that are not in province and are gray or enemy,
+        return the one with minimum effective marching distance (enemy gets 20% reduction).
+        """
+        province_hexes = set(province.get_hexes())
+        my_color = province.get_color()
+        best_hex = None
+        best_effective = None
+        for h, dist in reachable_dist.items():
+            if h in province_hexes:
+                continue
+            if h.color == my_color:
+                continue
+            effective = dist * enemy_distance_scale if (h.color != HColor.GRAY) else float(dist)
+            if best_hex is None or effective < best_effective:
+                best_hex = h
+                best_effective = effective
+        return best_hex
+
+    def move_afk_units(self) -> None:
+        """Move units that haven't moved (AFK units). All distances use marching distance (wave fill)."""
+        if self.is_difficulty_less_than(Difficulty.AVERAGE):
+            return  # Easy: do nothing
+
+        self.update_units_ready_to_move()
+        current_color = self.get_current_color()
+        if not current_color:
             return
-        
-        # Try to use mass march emulation first
-        if not self.emulate_mass_march_for_single_unit(hex, target_hex):
-            # Fallback: move quickly to prevent infinite loop
-            self.move_afk_unit_quickly(hex)
-    
-    def move_afk_unit_quickly(self, hex) -> None:
-        """Move AFK unit quickly (fallback)."""
-        self.get_move_zone_manager().update_for_unit(hex)
-        move_zone = self.get_move_zone_manager().hexes
-        self.exclude_friendly_units_from_move_zone(move_zone)
-        self.exclude_friendly_buildings_from_move_zone(move_zone)
-        if len(move_zone) == 0:
+        for unit_hex in self.units_ready_to_move:
+            print(f"AFK unit ready to move: {unit_hex.coordinate1}, {unit_hex.coordinate2}")
+
+        if self.is_difficulty_less_than(Difficulty.EXPERT):
+            # Average: move all units toward any trees in the province (marching distance)
+            for unit_hex in self.units_ready_to_move:
+                if not self.is_ready(unit_hex):
+                    continue
+                province = unit_hex.get_province()
+                if not province:
+                    continue
+                trees = self._get_trees_in_province(province)
+                if not trees:
+                    continue
+                reachable = self._get_reachable_with_marching_distances(unit_hex, 999)
+                reachable_trees = [(t, reachable[t]) for t in trees if t in reachable]
+                if not reachable_trees:
+                    continue
+                closest_tree = min(reachable_trees, key=lambda x: x[1])[0]
+                print(f"Moving AFK-average unit from {unit_hex.coordinate1}, {unit_hex.coordinate2} to {closest_tree.coordinate1}, {closest_tree.coordinate2}")
+                self._move_unit_one_step_toward_by_marching(unit_hex, closest_tree)
             return
-        target_hex = self.random.choice(move_zone)
-        self.command_unit_move(hex, target_hex)
-    
-    def find_random_hex_in_perimeter(self, province):
-        """Find a random hex in province perimeter."""
-        self.hexes_in_perimeter.clear()
-        for hex in province.get_hexes():
-            if self.is_adjacent_to_enemy(hex):
-                self.hexes_in_perimeter.append(hex)
-        
-        if len(self.hexes_in_perimeter) == 0:
-            return None
-        return self.random.choice(self.hexes_in_perimeter)
+
+        # Expert+: at most 3 peasants per province toward trees (trees marked targeted); others toward closest non-province (enemy 20% boost)
+        for province in self.game_state.provinces_manager.provinces:
+            if province.get_color() != current_color:
+                continue
+            trees = self._get_trees_in_province(province)
+            ready_in_province = [
+                h for h in self.units_ready_to_move
+                if self.is_ready(h) and h.get_province() == province
+            ]
+            peasants = [h for h in ready_in_province if h.piece == PieceType.PEASANT]
+            # Marching distance to nearest tree for each peasant
+            def dist_to_nearest_tree(unit_hex):
+                reachable = self._get_reachable_with_marching_distances(unit_hex, 999)
+                if not trees:
+                    return 0
+                return min(reachable.get(t, 999999) for t in trees)
+            peasants_sorted = sorted(peasants, key=dist_to_nearest_tree)
+            peasants_to_trees = peasants_sorted[:3]
+            print(f"Peasants to trees: {peasants_to_trees}")
+            others = [h for h in ready_in_province if h not in peasants_to_trees]
+
+            targeted_trees = set()
+            for unit_hex in peasants_to_trees:
+                if not self.is_ready(unit_hex):
+                    continue
+                if not trees:
+                    continue
+                reachable = self._get_reachable_with_marching_distances(unit_hex, 999)
+                untargeted = [t for t in trees if t not in targeted_trees and t in reachable]
+                if not untargeted:
+                    continue
+                closest_tree = min(untargeted, key=lambda t: reachable[t])
+                targeted_trees.add(closest_tree)
+                print(f"Moving AFK-expert unit to tree from {unit_hex.coordinate1}, {unit_hex.coordinate2} to {closest_tree.coordinate1}, {closest_tree.coordinate2}")
+                self._move_unit_one_step_toward_by_marching(unit_hex, closest_tree)
+
+            # Recompute others (who is still ready after tree peasants moved), then strongest first
+            others = [
+                h for h in self.units_ready_to_move
+                if self.is_ready(h) and h.get_province() == province
+            ]
+            others_by_strength = sorted(others, key=lambda h: self.get_strength(h.piece), reverse=True)
+            for unit_hex in others_by_strength:
+                if not self.is_ready(unit_hex):
+                    continue
+                reachable = self._get_reachable_with_marching_distances(unit_hex, 999)
+                target = self._find_closest_non_province_hex_by_marching(
+                    unit_hex, province, reachable, enemy_distance_scale=0.8
+                )
+                if target:
+                    print(f"Moving AFK-expert unit to non-province from {unit_hex.coordinate1}, {unit_hex.coordinate2} to {target.coordinate1}, {target.coordinate2}")
+                    self._move_unit_one_step_toward_by_marching(unit_hex, target)
+                else:
+                    print(f"No target found for AFK-expert unit from {unit_hex.coordinate1}, {unit_hex.coordinate2}")
+

@@ -156,8 +156,12 @@ class AbstractAI(ABC):
             Difficulty.EXPERT,
             Difficulty.BALANCER,
         ]
-        # This is a simplified check - in practice, difficulty comparison is more complex
-        return False  # Default to allowing all features
+        try:
+            current_idx = difficulty_order.index(self.difficulty)
+            given_idx = difficulty_order.index(difficulty)
+            return current_idx < given_idx
+        except ValueError:
+            return False
     
     def command_unit_build(self, province, hex, strength):
         """Command building a unit."""

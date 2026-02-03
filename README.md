@@ -64,6 +64,8 @@ pytest tests/visual/test_split_province.py::test_split_province_A -v
 
 Generate coverage report (terminal output):
 ```bash
+cd antiyoy_py
+source .venv/bin/activate
 pytest tests/ --cov=core --cov=save_load --cov=players --cov=commands --cov=visibility --cov=ai --cov-report=term -v
 ```
 
