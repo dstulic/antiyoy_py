@@ -548,6 +548,11 @@ class AiBalancerDefaultV1(AbstractAI):
         """Try to build towers."""
         if self.is_difficulty_less_than(Difficulty.AVERAGE):
             return
+        if self.game_state.turns_manager.lap == 0:
+            print(f"try_to_build_towers - Don't build towers on first lap")
+            return # Don't build towers on first lap
+
+        print(f"try_to_build_towers - Building towers on lap {self.game_state.turns_manager.lap}")
         
         tower_price = self.get_ruleset().get_price(province, PieceType.TOWER)
         count = 100
@@ -583,8 +588,9 @@ class AiBalancerDefaultV1(AbstractAI):
         if len(self.nearby_provinces) == 0:
             return False  # Build towers only at front line
         
-        if self.game_state.turns_manager.lap == 0:
-            return False  # Don't build towers on first lap
+        # moved to try_to_build_towers:
+        # if self.game_state.turns_manager.lap == 0:
+        #     return False  # Don't build towers on first lap
         
         return self.get_predicted_defense_gain_by_new_tower(hex) >= 3
     
@@ -636,6 +642,8 @@ class AiBalancerDefaultV1(AbstractAI):
             return False
         
         for nearby_province in self.nearby_provinces:
+            # if any nearby province has more than half of the hexes of our province
+            # then we need a strong tower on this hex
             if len(nearby_province.get_hexes()) > len(province.get_hexes()) / 2:
                 return True
         return False
@@ -824,8 +832,6 @@ class AiBalancerDefaultV1(AbstractAI):
         current_color = self.get_current_color()
         if not current_color:
             return
-        for unit_hex in self.units_ready_to_move:
-            print(f"AFK unit ready to move: {unit_hex.coordinate1}, {unit_hex.coordinate2}")
 
         if self.is_difficulty_less_than(Difficulty.EXPERT):
             # Average: move all units toward any trees in the province (marching distance)
@@ -843,7 +849,6 @@ class AiBalancerDefaultV1(AbstractAI):
                 if not reachable_trees:
                     continue
                 closest_tree = min(reachable_trees, key=lambda x: x[1])[0]
-                print(f"Moving AFK-average unit from {unit_hex.coordinate1}, {unit_hex.coordinate2} to {closest_tree.coordinate1}, {closest_tree.coordinate2}")
                 self._move_unit_one_step_toward_by_marching(unit_hex, closest_tree)
             return
 
@@ -865,7 +870,6 @@ class AiBalancerDefaultV1(AbstractAI):
                 return min(reachable.get(t, 999999) for t in trees)
             peasants_sorted = sorted(peasants, key=dist_to_nearest_tree)
             peasants_to_trees = peasants_sorted[:3]
-            print(f"Peasants to trees: {peasants_to_trees}")
             others = [h for h in ready_in_province if h not in peasants_to_trees]
 
             targeted_trees = set()
@@ -880,7 +884,6 @@ class AiBalancerDefaultV1(AbstractAI):
                     continue
                 closest_tree = min(untargeted, key=lambda t: reachable[t])
                 targeted_trees.add(closest_tree)
-                print(f"Moving AFK-expert unit to tree from {unit_hex.coordinate1}, {unit_hex.coordinate2} to {closest_tree.coordinate1}, {closest_tree.coordinate2}")
                 self._move_unit_one_step_toward_by_marching(unit_hex, closest_tree)
 
             # Recompute others (who is still ready after tree peasants moved), then strongest first
@@ -897,8 +900,7 @@ class AiBalancerDefaultV1(AbstractAI):
                     unit_hex, province, reachable, enemy_distance_scale=0.8
                 )
                 if target:
-                    print(f"Moving AFK-expert unit to non-province from {unit_hex.coordinate1}, {unit_hex.coordinate2} to {target.coordinate1}, {target.coordinate2}")
                     self._move_unit_one_step_toward_by_marching(unit_hex, target)
-                else:
-                    print(f"No target found for AFK-expert unit from {unit_hex.coordinate1}, {unit_hex.coordinate2}")
+                # else:
+                #     print(f"No target found for AFK-expert unit from {unit_hex.coordinate1}, {unit_hex.coordinate2}")
 

@@ -30,6 +30,7 @@ class AbstractAI(ABC):
         1. Applies the AI's decision making (apply())
         2. Ends the turn
         """
+        print(f"Performing AI turn for {self.game_state.entities_manager.get_current_color()}")
         self.apply()
         self._command_turn_end()
 
@@ -65,7 +66,7 @@ class AbstractAI(ABC):
         """Command the turn to end."""
         from commands.types import EndTurnCommand
         from commands.executor import CommandExecutor
-        
+        print(f"Commanding turn end for {self.game_state.entities_manager.get_current_color()}")
         executor = CommandExecutor(self.game_state)
         command = EndTurnCommand()
         executor.execute(command, self.game_state.entities_manager.get_current_color())
