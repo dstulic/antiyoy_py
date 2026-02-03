@@ -6,15 +6,10 @@ from commands.types import (
     MoveUnitCommand,
     BuildPieceCommand,
     EndTurnCommand,
-    SetRelationCommand,
-    SendLetterCommand,
-    ApplyLetterCommand,
-    DeclineLetterCommand,
-    GiveMoneyCommand,
 )
 from commands.validator import CommandValidator
 from core.game_state import GameState
-from core.enums import HColor, EventType, RelationType
+from core.enums import HColor, EventType
 from core.events import EventType as EvtType
 
 
@@ -55,16 +50,6 @@ class CommandExecutor:
                 return self._execute_build_piece(command)
             elif isinstance(command, EndTurnCommand):
                 return self._execute_end_turn()
-            elif isinstance(command, SetRelationCommand):
-                return self._execute_set_relation(command, player_color)
-            elif isinstance(command, SendLetterCommand):
-                return self._execute_send_letter(command, player_color)
-            elif isinstance(command, ApplyLetterCommand):
-                return self._execute_apply_letter(command, player_color)
-            elif isinstance(command, DeclineLetterCommand):
-                return self._execute_decline_letter(command, player_color)
-            elif isinstance(command, GiveMoneyCommand):
-                return self._execute_give_money(command, player_color)
             else:
                 return False, f"Unknown command type: {command.command_type}"
         except Exception as e:
@@ -242,28 +227,3 @@ class CommandExecutor:
             return True, None
         
         return False, "Failed to create turn end event"
-
-    def _execute_set_relation(self, command: SetRelationCommand, player_color: HColor) -> tuple[bool, Optional[str]]:
-        """Execute set relation command."""
-        # Placeholder - would need diplomacy manager
-        return True, None
-
-    def _execute_send_letter(self, command: SendLetterCommand, player_color: HColor) -> tuple[bool, Optional[str]]:
-        """Execute send letter command."""
-        # Placeholder - would need letters manager
-        return True, None
-
-    def _execute_apply_letter(self, command: ApplyLetterCommand, player_color: HColor) -> tuple[bool, Optional[str]]:
-        """Execute apply letter command."""
-        # Placeholder - would need letters manager
-        return True, None
-
-    def _execute_decline_letter(self, command: DeclineLetterCommand, player_color: HColor) -> tuple[bool, Optional[str]]:
-        """Execute decline letter command."""
-        # Placeholder - would need letters manager
-        return True, None
-
-    def _execute_give_money(self, command: GiveMoneyCommand, player_color: HColor) -> tuple[bool, Optional[str]]:
-        """Execute give money command."""
-        # Placeholder - would need diplomacy manager
-        return True, None

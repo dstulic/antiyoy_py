@@ -7,18 +7,6 @@ from core.enums import Difficulty, HColor, PieceType
 from core.core_utils import get_strength, get_merge_result, is_unit
 
 
-class DiplomaticAI:
-    """Placeholder for diplomatic AI (diplomacy not implemented)."""
-    
-    def __init__(self, game_state: GameState):
-        """Initialize diplomatic AI."""
-        self.game_state = game_state
-    
-    def apply(self) -> None:
-        """Apply diplomatic actions."""
-        pass  # Diplomacy not implemented
-
-
 class AiBalancerDefaultV1(AbstractAI):
     """AI Balancer Default V1 - strategic AI implementation."""
     
@@ -35,10 +23,6 @@ class AiBalancerDefaultV1(AbstractAI):
     def get_version_code(self) -> int:
         """Get version code."""
         return 1
-    
-    def get_diplomatic_ai(self):
-        """Get diplomatic AI."""
-        return DiplomaticAI(self.game_state)
     
     def apply(self) -> None:
         """Apply AI decision making."""

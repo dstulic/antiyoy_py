@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from typing import Optional
-from core.enums import PieceType, RelationType
+from core.enums import PieceType
 from core.hex import Hex
 
 
@@ -50,57 +50,3 @@ class EndTurnCommand(Command):
         super().__init__("end_turn")
 
 
-@dataclass
-class SetRelationCommand(Command):
-    """Command to set diplomatic relation."""
-    target_color: str  # HColor value as string
-    relation_type: RelationType
-    
-    def __init__(self, target_color: str, relation_type: RelationType):
-        super().__init__("set_relation")
-        self.target_color = target_color
-        self.relation_type = relation_type
-
-
-@dataclass
-class SendLetterCommand(Command):
-    """Command to send a diplomatic letter."""
-    target_color: str  # HColor value as string
-    letter_type: str
-    
-    def __init__(self, target_color: str, letter_type: str):
-        super().__init__("send_letter")
-        self.target_color = target_color
-        self.letter_type = letter_type
-
-
-@dataclass
-class ApplyLetterCommand(Command):
-    """Command to apply a received letter."""
-    letter_id: int
-    
-    def __init__(self, letter_id: int):
-        super().__init__("apply_letter")
-        self.letter_id = letter_id
-
-
-@dataclass
-class DeclineLetterCommand(Command):
-    """Command to decline a received letter."""
-    letter_id: int
-    
-    def __init__(self, letter_id: int):
-        super().__init__("decline_letter")
-        self.letter_id = letter_id
-
-
-@dataclass
-class GiveMoneyCommand(Command):
-    """Command to give money to another player."""
-    target_color: str  # HColor value as string
-    amount: int
-    
-    def __init__(self, target_color: str, amount: int):
-        super().__init__("give_money")
-        self.target_color = target_color
-        self.amount = amount

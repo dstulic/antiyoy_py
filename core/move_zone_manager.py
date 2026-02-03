@@ -50,12 +50,6 @@ class MoveZoneManager:
                 if self.game_state.ruleset:
                     if not self.game_state.ruleset.can_hex_be_captured(hex, self._strength):
                         return False
-                # Check diplomacy (if diplomacy manager exists)
-                if self._start_entity and hasattr(self.game_state, 'diplomacy_manager') and self.game_state.diplomacy_manager:
-                    if not self.game_state.diplomacy_manager.is_attack_allowed(
-                        self._start_entity, hex
-                    ):
-                        return False
             
             return True
 

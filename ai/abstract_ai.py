@@ -20,8 +20,7 @@ class AbstractAI(ABC):
         self.game_state = game_state
         self.random = random.Random()
         self.difficulty: Optional[Difficulty] = None
-        self.diplomatic_ai = self.get_diplomatic_ai()
-        self.temp_list: List = []  # Temporary list for operations
+        self.temp_list: list = []  # Temporary list for operations
 
     def perform(self) -> None:
         """
@@ -29,11 +28,9 @@ class AbstractAI(ABC):
         
         This is the main entry point that:
         1. Applies the AI's decision making (apply())
-        2. Handles diplomatic actions
-        3. Ends the turn
+        2. Ends the turn
         """
         self.apply()
-        self._check_to_apply_diplomatic_ai()
         self._command_turn_end()
 
     def set_difficulty(self, difficulty: Difficulty) -> None:
@@ -62,24 +59,6 @@ class AbstractAI(ABC):
         
         This is where the AI makes its moves, builds pieces, etc.
         """
-        pass
-
-    @abstractmethod
-    def get_diplomatic_ai(self):
-        """
-        Get the diplomatic AI instance for this AI.
-        
-        Returns:
-            DiplomaticAI instance
-        """
-        pass
-
-    def _check_to_apply_diplomatic_ai(self) -> None:
-        """Check and apply diplomatic AI if diplomacy is enabled."""
-        # Placeholder - would need diplomacy manager
-        # if not self.game_state.diplomacy_manager or not self.game_state.diplomacy_manager.enabled:
-        #     return
-        # self.diplomatic_ai.apply()
         pass
 
     def _command_turn_end(self) -> None:

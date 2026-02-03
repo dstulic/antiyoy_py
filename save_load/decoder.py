@@ -95,7 +95,6 @@ class GameStateDecoder:
             self._decode_rules(game_state, level_code)
             self._decode_turn(game_state, level_code)
             # Optional sections
-            self._decode_diplomacy(game_state, level_code)
             self._decode_mail_basket(game_state, level_code)
             self._decode_fog(game_state, level_code)
             self._decode_rng_state(game_state, level_code)
@@ -343,11 +342,6 @@ class GameStateDecoder:
         if not source:
             return
         game_state.turns_manager.decode(source)
-
-    def _decode_diplomacy(self, game_state: GameState, level_code: str) -> None:
-        """Decode diplomacy section."""
-        # Placeholder - diplomacy manager not yet implemented
-        pass
 
     def _decode_mail_basket(self, game_state: GameState, level_code: str) -> None:
         """Decode mail basket section."""

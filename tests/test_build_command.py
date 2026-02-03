@@ -231,8 +231,6 @@ def create_mock_game_state(hexes, provinces, current_color: HColor, ruleset=None
     game_state.readiness_manager = MockReadinessManager()
     # Mock game_end_manager to prevent "Game has ended" errors in tests
     game_state.game_end_manager = MockGameEndManager()
-    # Mock diplomacy_manager (needed for MoveZoneManager)
-    game_state.diplomacy_manager = None
     # Mock move_zone_manager (needed for unit placement validation)
     game_state.move_zone_manager = MockMoveZoneManager(game_state)
     
