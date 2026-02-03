@@ -5,7 +5,7 @@ from pathlib import Path
 from tests.visual.visual_test_base import VisualTest, visual_test
 from core.game_state import GameState
 from core.core_utils import is_unit
-from core.enums import Difficulty
+from core.enums import Difficulty, HColor, PieceType
 from ai.ai_manager import AIManager
 from commands.executor import CommandExecutor
 from commands.types import EndTurnCommand
@@ -13,6 +13,45 @@ from commands.types import EndTurnCommand
 
 # Shared map filename for all difficulty variants
 AI_SPEND_MONEY_MAP = "ai_spend_money.map"
+
+# Expected lavender piece counts after turns (farms, towers, strong_towers, peasants).
+# If tests fail, AI behavior or map may have changed; or set RNG seed in setup for determinism.
+EXPECTED_LAVENDER = {
+    Difficulty.EASY: {"farms": 0, "towers": 0, "strong_towers": 0, "peasants": 2},
+    Difficulty.AVERAGE: {"farms": 6, "towers": 2, "strong_towers": 0, "peasants": 2},
+    Difficulty.HARD: {"farms": 5, "towers": 2, "strong_towers": 0, "peasants": 3},
+    Difficulty.EXPERT: {"farms": 4, "towers": 1, "strong_towers": 1, "peasants": 3},
+    Difficulty.BALANCER: {"farms": 4, "towers": 1, "strong_towers": 1, "peasants": 3},
+}
+
+
+def _count_lavender_pieces(game_state: GameState) -> dict:
+    """Count farms, towers, strong_towers, peasants for lavender."""
+    counts = {"farms": 0, "towers": 0, "strong_towers": 0, "peasants": 0}
+    for h in game_state.hexes:
+        if h.color != HColor.LAVENDER:
+            continue
+        if h.piece == PieceType.FARM:
+            counts["farms"] += 1
+        elif h.piece == PieceType.TOWER:
+            counts["towers"] += 1
+        elif h.piece == PieceType.STRONG_TOWER:
+            counts["strong_towers"] += 1
+        elif h.piece == PieceType.PEASANT:
+            counts["peasants"] += 1
+    return counts
+
+
+def _assert_lavender_piece_counts(game_state: GameState, difficulty: Difficulty) -> None:
+    """Assert lavender has expected piece counts for this difficulty."""
+    expected = EXPECTED_LAVENDER.get(difficulty)
+    if not expected:
+        return
+    counts = _count_lavender_pieces(game_state)
+    for key in ("farms", "towers", "strong_towers", "peasants"):
+        assert counts[key] == expected[key], (
+            f"Lavender {key}: expected {expected[key]}, got {counts[key]} (difficulty={difficulty.value})"
+        )
 
 
 def _run_until_lap_2(game_state: GameState, ai_manager: AIManager) -> None:
@@ -194,30 +233,35 @@ def test_ai_spend_money_easy():
     """Run AI spend money test with EASY difficulty."""
     initial, final = _run_ai_spend_money_for_difficulty(Difficulty.EASY)
     _assert_ai_made_move(initial, final)
+    _assert_lavender_piece_counts(final, Difficulty.EASY)
 
 
 def test_ai_spend_money_average():
     """Run AI spend money test with AVERAGE difficulty."""
     initial, final = _run_ai_spend_money_for_difficulty(Difficulty.AVERAGE)
     _assert_ai_made_move(initial, final)
+    _assert_lavender_piece_counts(final, Difficulty.AVERAGE)
 
 
 def test_ai_spend_money_hard():
     """Run AI spend money test with HARD difficulty."""
     initial, final = _run_ai_spend_money_for_difficulty(Difficulty.HARD)
     _assert_ai_made_move(initial, final)
+    _assert_lavender_piece_counts(final, Difficulty.HARD)
 
 
 def test_ai_spend_money_expert():
     """Run AI spend money test with EXPERT difficulty."""
     initial, final = _run_ai_spend_money_for_difficulty(Difficulty.EXPERT)
     _assert_ai_made_move(initial, final)
+    _assert_lavender_piece_counts(final, Difficulty.EXPERT)
 
 
 def test_ai_spend_money_balancer():
     """Run AI spend money test with BALANCER difficulty."""
     initial, final = _run_ai_spend_money_for_difficulty(Difficulty.BALANCER)
     _assert_ai_made_move(initial, final)
+    _assert_lavender_piece_counts(final, Difficulty.BALANCER)
 
 
 def _assert_ai_made_move(initial: GameState, final: GameState) -> None:

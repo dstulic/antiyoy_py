@@ -834,7 +834,7 @@ class AiBalancerDefaultV1(AbstractAI):
             return
 
         if self.is_difficulty_less_than(Difficulty.EXPERT):
-            # Average: move all units toward any trees in the province (marching distance)
+            # Average: move toward trees. Hard: same, but if no trees move toward border (like expert).
             for unit_hex in self.units_ready_to_move:
                 if not self.is_ready(unit_hex):
                     continue
@@ -842,14 +842,21 @@ class AiBalancerDefaultV1(AbstractAI):
                 if not province:
                     continue
                 trees = self._get_trees_in_province(province)
-                if not trees:
-                    continue
-                reachable = self._get_reachable_with_marching_distances(unit_hex, 999)
-                reachable_trees = [(t, reachable[t]) for t in trees if t in reachable]
-                if not reachable_trees:
-                    continue
-                closest_tree = min(reachable_trees, key=lambda x: x[1])[0]
-                self._move_unit_one_step_toward_by_marching(unit_hex, closest_tree)
+                if trees:
+                    reachable = self._get_reachable_with_marching_distances(unit_hex, 999)
+                    reachable_trees = [(t, reachable[t]) for t in trees if t in reachable]
+                    if reachable_trees:
+                        closest_tree = min(reachable_trees, key=lambda x: x[1])[0]
+                        self._move_unit_one_step_toward_by_marching(unit_hex, closest_tree)
+                        continue
+                # No trees or no reachable trees: Hard only -> move toward border
+                if not self.is_difficulty_less_than(Difficulty.HARD):
+                    reachable = self._get_reachable_with_marching_distances(unit_hex, 999)
+                    target = self._find_closest_non_province_hex_by_marching(
+                        unit_hex, province, reachable, enemy_distance_scale=0.8
+                    )
+                    if target:
+                        self._move_unit_one_step_toward_by_marching(unit_hex, target)
             return
 
         # Expert+: at most 3 peasants per province toward trees (trees marked targeted); others toward closest non-province (enemy 20% boost)
