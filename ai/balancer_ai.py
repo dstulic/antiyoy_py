@@ -49,7 +49,6 @@ class AiBalancerDefaultV1(AbstractAI):
         # Main AI logic: move units, spend money, merge units, move AFK units
         self.move_units()
         self.spend_money_and_merge_units()
-        self.check_to_kill_redundant_units()
         self.move_afk_units()
     
     def move_units(self) -> None:
@@ -763,65 +762,6 @@ class AiBalancerDefaultV1(AbstractAI):
         
         merged_strength = self.get_strength(merge_result)
         return self.can_afford_unit(province, merged_strength)
-    
-    def check_to_kill_redundant_units(self) -> None:
-        """Check and kill redundant units."""
-        for province in self.game_state.provinces_manager.provinces:
-            self.check_to_kill_redundant_units_in_province(province)
-    
-    def check_to_kill_redundant_units_in_province(self, province) -> None:
-        """Check and kill redundant units in a province."""
-        if self.is_difficulty_less_than(Difficulty.HARD):
-            return
-        
-        detected_strong_units = False
-        for hex in province.get_hexes():
-            if not hex.piece or not is_unit(hex.piece):
-                continue
-            if not self.is_ready(hex):
-                return
-            if self.get_strength(hex) < 3:
-                continue
-            detected_strong_units = True
-        
-        if not detected_strong_units:
-            return
-        
-        # Units are not doing anything - kill them
-        self.kill_redundant_units(province)
-    
-    def kill_redundant_units(self, province) -> None:
-        """Kill redundant units by merging with peasants."""
-        peasant_price = self.get_ruleset().get_price(province, PieceType.PEASANT)
-        count = 0
-        while count < 1000:
-            count += 1
-            if not (province.get_money() >= peasant_price and 
-                    self.game_state.economics_manager.calculate_province_profit(province) >= 0):
-                break
-            hex = self.find_strongest_unit(province, PieceType.KNIGHT)
-            if not hex:
-                break
-            if not self.can_afford_unit(province, 1):
-                break
-            self.command_unit_build(province, hex, 1)
-    
-    def find_strongest_unit(self, province, ignored_piece_type: PieceType):
-        """Find strongest unit in province (excluding ignored type)."""
-        best_hex = None
-        max_strength = 0
-        
-        for hex in province.get_hexes():
-            if not hex.piece or not is_unit(hex.piece):
-                continue
-            if hex.piece == ignored_piece_type:
-                continue
-            strength = self.get_strength(hex)
-            if best_hex is None or strength > max_strength:
-                best_hex = hex
-                max_strength = strength
-        
-        return best_hex
     
     def _get_trees_in_province(self, province) -> List:
         """Return list of hexes in province that have a tree (PINE or PALM)."""
