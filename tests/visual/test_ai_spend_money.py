@@ -14,20 +14,63 @@ from commands.types import EndTurnCommand
 # Shared map filename for all difficulty variants
 AI_SPEND_MONEY_MAP = "ai_spend_money.map"
 
-# Expected lavender piece counts after turns (farms, towers, strong_towers, peasants).
+# Expected lavender piece counts per lap (lap -> difficulty -> piece counts).
+# Add more laps (e.g. 3, 4) with expected counts to assert after more turns.
 # If tests fail, AI behavior or map may have changed; or set RNG seed in setup for determinism.
-EXPECTED_LAVENDER = {
-    Difficulty.EASY: {"farms": 0, "towers": 0, "strong_towers": 0, "peasants": 2},
-    Difficulty.AVERAGE: {"farms": 6, "towers": 2, "strong_towers": 0, "peasants": 2},
-    Difficulty.HARD: {"farms": 5, "towers": 2, "strong_towers": 0, "peasants": 3},
-    Difficulty.EXPERT: {"farms": 4, "towers": 1, "strong_towers": 1, "peasants": 3},
-    Difficulty.BALANCER: {"farms": 4, "towers": 1, "strong_towers": 1, "peasants": 3},
+EXPECTED_LAVENDER_BY_LAP = {
+    2: {
+        Difficulty.EASY: {"farms": 0,  "peasants": 2},
+        Difficulty.AVERAGE: {"farms": 6, "towers": 2,  "peasants": 2},
+        Difficulty.HARD: {"farms": 5, "towers": 2,  "peasants": 1, "spearman": 1},
+        Difficulty.EXPERT: {"farms": 4, "towers": 1, "strong_towers": 1, "peasants": 3},
+        Difficulty.BALANCER: {"farms": 4, "towers": 1, "strong_towers": 1, "peasants": 3},
+    },
+    3: {
+        Difficulty.EASY: {"farms": 0,  "peasants": 2},
+        Difficulty.AVERAGE: {"farms": 8, "towers": 2,  "peasants": 2},
+        Difficulty.HARD: {"farms": 7, "towers": 2,  "peasants": 1, "spearman": 1},
+        Difficulty.EXPERT: {"farms": 4, "strong_towers": 2, "peasants": 3},
+        Difficulty.BALANCER: {"farms": 4, "strong_towers": 2, "peasants": 3},
+    },
+    4: {
+    },
+    5: {
+        Difficulty.EXPERT: {"farms": 6, "strong_towers": 2, "peasants": 1, "spearman": 1},
+        Difficulty.BALANCER: {"farms": 6, "strong_towers": 2, "peasants": 1, "spearman": 1},
+    },
+    6: {
+        Difficulty.EXPERT: {"farms": 8, "strong_towers": 2, "peasants": 1, "spearman": 1},
+        Difficulty.BALANCER: {"farms": 8, "strong_towers": 2, "peasants": 1, "spearman": 1},
+    },
+    7: {
+        Difficulty.HARD: {"farms": 14, "towers": 3, "baron": 1},
+        Difficulty.EXPERT: {"farms": 9, "strong_towers": 2, "peasants": 1, "spearman": 1},
+        Difficulty.BALANCER: {"farms": 9, "strong_towers": 2, "peasants": 1, "spearman": 1},
+    },
+    8: {
+        Difficulty.EXPERT: {"farms": 11, "strong_towers": 2, "peasants": 1, "spearman": 1},
+        Difficulty.BALANCER: {"farms": 11, "strong_towers": 2, "peasants": 1, "spearman": 1},
+    },
+    11: {
+        Difficulty.EXPERT: {"farms": 15, "strong_towers": 2, "baron": 1},
+        Difficulty.BALANCER: {"farms": 15, "strong_towers": 2, "baron": 1},
+    },
+    13: {
+    },
+    19: {
+
+    },
+    21: {
+
+    },
 }
+LAVENDER_CHECKPOINT_LAPS = sorted(EXPECTED_LAVENDER_BY_LAP.keys())
+MAX_LAVENDER_CHECKPOINT_LAP = max(LAVENDER_CHECKPOINT_LAPS) if LAVENDER_CHECKPOINT_LAPS else 2
 
 
 def _count_lavender_pieces(game_state: GameState) -> dict:
-    """Count farms, towers, strong_towers, peasants for lavender."""
-    counts = {"farms": 0, "towers": 0, "strong_towers": 0, "peasants": 0}
+    """Count pieces for lavender."""
+    counts = {"farms": 0, "towers": 0, "strong_towers": 0, "peasants": 0, "spearman": 0, "baron": 0}
     for h in game_state.hexes:
         if h.color != HColor.LAVENDER:
             continue
@@ -39,25 +82,39 @@ def _count_lavender_pieces(game_state: GameState) -> dict:
             counts["strong_towers"] += 1
         elif h.piece == PieceType.PEASANT:
             counts["peasants"] += 1
+        elif h.piece == PieceType.SPEARMAN:
+            counts["spearman"] += 1
+        elif h.piece == PieceType.BARON:
+            counts["baron"] += 1
     return counts
 
 
-def _assert_lavender_piece_counts(game_state: GameState, difficulty: Difficulty) -> None:
-    """Assert lavender has expected piece counts for this difficulty."""
-    expected = EXPECTED_LAVENDER.get(difficulty)
+def _assert_lavender_piece_counts(
+    game_state: GameState, difficulty: Difficulty, lap: int
+) -> None:
+    """Assert lavender has expected piece counts for this difficulty at this lap."""
+    expected = EXPECTED_LAVENDER_BY_LAP.get(lap, {}).get(difficulty)
     if not expected:
         return
     counts = _count_lavender_pieces(game_state)
-    for key in ("farms", "towers", "strong_towers", "peasants"):
-        assert counts[key] == expected[key], (
-            f"Lavender {key}: expected {expected[key]}, got {counts[key]} (difficulty={difficulty.value})"
+    for key in expected:
+        got = counts.get(key, 0)
+        assert got == expected[key], (
+            f"Lavender {key} (lap={lap}, difficulty={difficulty.value}): "
+            f"expected {expected[key]}, got {got}"
         )
 
 
-def _run_until_lap_2(game_state: GameState, ai_manager: AIManager) -> None:
-    """Run turns until lap >= 2: process AI turns, end turn for human player."""
+def _run_until_lap(
+    game_state: GameState,
+    ai_manager: AIManager,
+    max_lap: int,
+    difficulty: Difficulty,
+) -> None:
+    """Run turns until lap >= max_lap; process AI turns, end turn for human. Assert lavender when we first enter each checkpoint lap."""
     executor = CommandExecutor(game_state)
-    while game_state.turns_manager.lap < 2:
+    prev_lap = game_state.turns_manager.lap
+    while game_state.turns_manager.lap < max_lap:
         current_entity = game_state.entities_manager.get_current_entity()
         if not current_entity:
             break
@@ -69,6 +126,11 @@ def _run_until_lap_2(game_state: GameState, ai_manager: AIManager) -> None:
                 raise RuntimeError(f"End turn failed: {error}")
         else:
             break
+        lap = game_state.turns_manager.lap
+        # Assert only when we've just entered a checkpoint lap (lap increased to this value)
+        if prev_lap < lap and lap in LAVENDER_CHECKPOINT_LAPS and EXPECTED_LAVENDER_BY_LAP.get(lap, {}).get(difficulty):
+            _assert_lavender_piece_counts(game_state, difficulty, lap)
+        prev_lap = lap
 
 
 @visual_test("ai spend money easy", "AI spend money (easy)")
@@ -90,7 +152,7 @@ class AiSpendMoneyEasyTest(VisualTest):
         _assert_ready_ai_unit_at_32(game_state)
         _print_move_zone_for_unit_at_32(game_state)
         ai_manager = AIManager(game_state, Difficulty.EASY)
-        _run_until_lap_2(game_state, ai_manager)
+        _run_until_lap(game_state, ai_manager, MAX_LAVENDER_CHECKPOINT_LAP, Difficulty.EASY)
         return game_state
 
 
@@ -113,7 +175,7 @@ class AiSpendMoneyAverageTest(VisualTest):
         _assert_ready_ai_unit_at_32(game_state)
         _print_move_zone_for_unit_at_32(game_state)
         ai_manager = AIManager(game_state, Difficulty.AVERAGE)
-        _run_until_lap_2(game_state, ai_manager)
+        _run_until_lap(game_state, ai_manager, MAX_LAVENDER_CHECKPOINT_LAP, Difficulty.AVERAGE)
         return game_state
 
 
@@ -136,7 +198,7 @@ class AiSpendMoneyHardTest(VisualTest):
         _assert_ready_ai_unit_at_32(game_state)
         _print_move_zone_for_unit_at_32(game_state)
         ai_manager = AIManager(game_state, Difficulty.HARD)
-        _run_until_lap_2(game_state, ai_manager)
+        _run_until_lap(game_state, ai_manager, MAX_LAVENDER_CHECKPOINT_LAP, Difficulty.HARD)
         return game_state
 
 
@@ -159,7 +221,7 @@ class AiSpendMoneyExpertTest(VisualTest):
         _assert_ready_ai_unit_at_32(game_state)
         _print_move_zone_for_unit_at_32(game_state)
         ai_manager = AIManager(game_state, Difficulty.EXPERT)
-        _run_until_lap_2(game_state, ai_manager)
+        _run_until_lap(game_state, ai_manager, MAX_LAVENDER_CHECKPOINT_LAP, Difficulty.EXPERT)
         return game_state
 
 
@@ -182,7 +244,7 @@ class AiSpendMoneyBalancerTest(VisualTest):
         _assert_ready_ai_unit_at_32(game_state)
         _print_move_zone_for_unit_at_32(game_state)
         ai_manager = AIManager(game_state, Difficulty.BALANCER)
-        _run_until_lap_2(game_state, ai_manager)
+        _run_until_lap(game_state, ai_manager, MAX_LAVENDER_CHECKPOINT_LAP, Difficulty.BALANCER)
         return game_state
 
 
@@ -233,35 +295,30 @@ def test_ai_spend_money_easy():
     """Run AI spend money test with EASY difficulty."""
     initial, final = _run_ai_spend_money_for_difficulty(Difficulty.EASY)
     _assert_ai_made_move(initial, final)
-    _assert_lavender_piece_counts(final, Difficulty.EASY)
 
 
 def test_ai_spend_money_average():
     """Run AI spend money test with AVERAGE difficulty."""
     initial, final = _run_ai_spend_money_for_difficulty(Difficulty.AVERAGE)
     _assert_ai_made_move(initial, final)
-    _assert_lavender_piece_counts(final, Difficulty.AVERAGE)
 
 
 def test_ai_spend_money_hard():
     """Run AI spend money test with HARD difficulty."""
     initial, final = _run_ai_spend_money_for_difficulty(Difficulty.HARD)
     _assert_ai_made_move(initial, final)
-    _assert_lavender_piece_counts(final, Difficulty.HARD)
 
 
 def test_ai_spend_money_expert():
     """Run AI spend money test with EXPERT difficulty."""
     initial, final = _run_ai_spend_money_for_difficulty(Difficulty.EXPERT)
     _assert_ai_made_move(initial, final)
-    _assert_lavender_piece_counts(final, Difficulty.EXPERT)
 
 
 def test_ai_spend_money_balancer():
     """Run AI spend money test with BALANCER difficulty."""
     initial, final = _run_ai_spend_money_for_difficulty(Difficulty.BALANCER)
     _assert_ai_made_move(initial, final)
-    _assert_lavender_piece_counts(final, Difficulty.BALANCER)
 
 
 def _assert_ai_made_move(initial: GameState, final: GameState) -> None:

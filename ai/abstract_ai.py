@@ -31,6 +31,19 @@ class AbstractAI(ABC):
         2. Ends the turn
         """
         print(f"Performing AI turn for {self.game_state.entities_manager.get_current_color()}")
+        current_entity = self.game_state.entities_manager.get_current_entity()
+        if current_entity:
+            current_color = current_entity.color
+            ruleset = self.game_state.ruleset
+            economics = self.game_state.economics_manager
+            for province in self.game_state.provinces_manager.provinces:
+                if province.get_color() != current_color:
+                    continue
+                name = province.get_city_name()
+                money = province.get_money()
+                income = economics.calculate_province_income(province) if economics else 0
+                farm_cost = ruleset.get_price(province, PieceType.FARM) if ruleset else 0
+                print(f"  {name}: money={money}, income/turn={income}, farm_cost={farm_cost}")
         self.apply()
         self._command_turn_end()
 

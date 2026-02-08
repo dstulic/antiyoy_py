@@ -3,6 +3,7 @@
 from typing import List, Optional
 from ai.abstract_ai import AbstractAI
 from core.game_state import GameState
+from core.hex import Hex
 from core.enums import Difficulty, HColor, PieceType
 from core.core_utils import get_strength, get_merge_result, is_unit
 
@@ -74,6 +75,7 @@ class AiBalancerDefaultV1(AbstractAI):
         attackable_hexes = self.find_attackable_hexes(hex.color, move_zone)
         if len(attackable_hexes) > 0:
             # Attack something
+            print(f"Trying to attack something with unit at {hex.coordinate1}, {hex.coordinate2}", "attackable_hexes:", attackable_hexes)
             self.try_to_attack_something(hex, attackable_hexes)
         else:
             # Nothing to attack - push unit to better defense if adjacent to enemy
@@ -154,7 +156,7 @@ class AiBalancerDefaultV1(AbstractAI):
             return
         
         strength = self.get_strength(hex)
-        most_attackable_hex = self.find_most_attractive_hex(attackable_hexes, hex.color, strength)
+        most_attackable_hex = self.find_most_attractive_hex(attackable_hexes, hex.color, strength, hex)
         if most_attackable_hex:
             self.command_unit_move(hex, most_attackable_hex)
     
@@ -182,12 +184,26 @@ class AiBalancerDefaultV1(AbstractAI):
             return False
         defense_with = self.get_defense_value(hex)
         return defense_with - defense_without < 2
-    
-    def find_most_attractive_hex(self, attackable_hexes: List, color: HColor, strength: int):
+
+    def _axial_distance(self, hex1: Hex, hex2: Hex) -> int:
+        """Axial (hex) distance between two hexes."""
+        dq = hex2.coordinate1 - hex1.coordinate1
+        dr = hex2.coordinate2 - hex1.coordinate2
+        return (abs(dq) + abs(dq + dr) + abs(dr)) // 2
+
+    def find_closest_hex(self, source_hex: Hex, hexes: List) -> Optional[Hex]:
+        """Return the hex from hexes that is closest to source_hex by axial distance. None if hexes is empty."""
+        if not hexes:
+            return None
+        return min(hexes, key=lambda h: self._axial_distance(source_hex, h))
+
+    def find_most_attractive_hex(self, attackable_hexes: List, color: HColor, strength: int, source_hex: Hex):
         """Find most attractive hex to attack."""
         if self.is_difficulty_less_than(Difficulty.AVERAGE):
             if attackable_hexes:
-                return self.random.choice(attackable_hexes)
+                    # find closest hex to source_hex
+                closest_hex = self.find_closest_hex(source_hex, attackable_hexes)
+                return closest_hex
             return None
         
         # For barons (strength 3) and knights (strength 4), use special logic
@@ -411,8 +427,8 @@ class AiBalancerDefaultV1(AbstractAI):
         
         if len(attackable_hexes) == 0:
             return False
-        
-        best_hex = self.find_most_attractive_hex(attackable_hexes, province.get_color(), strength)
+        source_hex = next((h for h in province.get_hexes() if h.piece == PieceType.CITY), None)
+        best_hex = self.find_most_attractive_hex(attackable_hexes, province.get_color(), strength, source_hex)
         if best_hex:
             return self.command_unit_build(province, best_hex, strength)
         return False
@@ -508,18 +524,35 @@ class AiBalancerDefaultV1(AbstractAI):
         return total
     
     def find_good_hex_for_farm(self, province):
-        """Find a good hex for building a farm."""
-        if not self.has_province_good_hex_for_farm(province):
+        """Find a good hex for building a farm: empty province hexes adjacent to a farm or city, closest to the city."""
+        province_hexes = set(province.get_hexes())
+        all_farm_and_city_hexes = [
+            h for h in province_hexes
+            if h.piece == PieceType.FARM or h.piece == PieceType.CITY
+        ]
+        all_farm_eligible_hexes = []
+        for h in all_farm_and_city_hexes:
+            for adj_hex in h.adjacent_hexes:
+                if adj_hex not in province_hexes:
+                    continue
+                if adj_hex.get_province() != province:
+                    continue
+                if adj_hex.piece:
+                    continue  # must be empty
+                all_farm_eligible_hexes.append(adj_hex)
+        # Deduplicate (a hex can be adjacent to multiple farm/city hexes)
+        all_farm_eligible_hexes = list(dict.fromkeys(all_farm_eligible_hexes))
+        if not all_farm_eligible_hexes:
             return None
-        
-        count = 0
-        hexes = province.get_hexes()
-        while count < 1000:
-            count += 1
-            hex = self.random.choice(hexes)
-            if self.is_hex_good_for_farm(hex):
-                return hex
-        return None
+        city_hex = next(
+            (h for h in province.get_hexes() if h.piece == PieceType.CITY),
+            None,
+        )
+        if not city_hex:
+            return all_farm_eligible_hexes[0]  # no city: return first eligible
+        if self.is_difficulty_less_than(Difficulty.HARD):
+            return max(all_farm_eligible_hexes, key=lambda h: self._axial_distance(city_hex, h))
+        return self.find_closest_hex(city_hex, all_farm_eligible_hexes)
     
     def has_province_good_hex_for_farm(self, province) -> bool:
         """Check if province has a good hex for farm."""
@@ -549,10 +582,7 @@ class AiBalancerDefaultV1(AbstractAI):
         if self.is_difficulty_less_than(Difficulty.AVERAGE):
             return
         if self.game_state.turns_manager.lap == 0:
-            print(f"try_to_build_towers - Don't build towers on first lap")
             return # Don't build towers on first lap
-
-        print(f"try_to_build_towers - Building towers on lap {self.game_state.turns_manager.lap}")
         
         tower_price = self.get_ruleset().get_price(province, PieceType.TOWER)
         count = 100
