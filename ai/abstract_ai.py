@@ -155,7 +155,25 @@ class AbstractAI(ABC):
             return current_idx < given_idx
         except ValueError:
             return False
-    
+
+    def current_difficulty_as_string(self):
+        """Get difficulty as string."""
+        match self.difficulty:
+            case Difficulty.TUTORIAL:
+                return "Tutorial"
+            case Difficulty.EASY:
+                return "Easy"
+            case Difficulty.AVERAGE:
+                return "Average"
+            case Difficulty.HARD:
+                return "Hard"
+            case Difficulty.EXPERT:
+                return "Expert"
+            case Difficulty.BALANCER:
+                return "Balancer"
+            case _:
+                return "Unknown"
+
     def command_unit_build(self, province, hex, strength):
         """Command building a unit."""
         from core.core_utils import get_unit_by_strength
@@ -170,7 +188,8 @@ class AbstractAI(ABC):
         command = BuildPieceCommand(
             hex=hex,
             piece_type=piece_type,
-            province_id=province.get_id()
+            province_id=province.get_id(),
+            province_hex=province.get_first_hex()
         )
         success, _ = executor.execute(command, self.get_current_color())
         return success

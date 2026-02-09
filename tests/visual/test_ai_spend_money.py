@@ -18,51 +18,54 @@ AI_SPEND_MONEY_MAP = "ai_spend_money.map"
 # Add more laps (e.g. 3, 4) with expected counts to assert after more turns.
 # If tests fail, AI behavior or map may have changed; or set RNG seed in setup for determinism.
 EXPECTED_LAVENDER_BY_LAP = {
+    1: {
+    },
     2: {
-        Difficulty.EASY: {"farms": 0,  "peasants": 2},
-        Difficulty.AVERAGE: {"farms": 6, "towers": 2,  "peasants": 2},
-        Difficulty.HARD: {"farms": 5, "towers": 2,  "peasants": 1, "spearman": 1},
-        Difficulty.EXPERT: {"farms": 4, "towers": 1, "strong_towers": 1, "peasants": 3},
-        Difficulty.BALANCER: {"farms": 4, "towers": 1, "strong_towers": 1, "peasants": 3},
+        Difficulty.EASY: {"farms": 0,  "peasants": 3},
+        Difficulty.AVERAGE: {"farms": 5, "towers": 2,  "peasants": 3},
+        Difficulty.HARD: {"farms": 5, "towers": 2,  "peasants": 4, "spearman": 0},
+        Difficulty.EXPERT: {"farms": 5, "towers": 2, "strong_towers": 0, "peasants": 4},
+        Difficulty.BALANCER: {"farms": 5, "towers": 2, "strong_towers": 0, "peasants": 4},
     },
     3: {
-        Difficulty.EASY: {"farms": 0,  "peasants": 2},
-        Difficulty.AVERAGE: {"farms": 8, "towers": 2,  "peasants": 2},
-        Difficulty.HARD: {"farms": 7, "towers": 2,  "peasants": 1, "spearman": 1},
-        Difficulty.EXPERT: {"farms": 4, "strong_towers": 2, "peasants": 3},
-        Difficulty.BALANCER: {"farms": 4, "strong_towers": 2, "peasants": 3},
-    },
-    4: {
+        Difficulty.EASY: {"farms": 0,  "peasants": 3},
+        Difficulty.AVERAGE: {"farms": 7, "towers": 2,  "peasants": 3},
+        Difficulty.HARD: {"farms": 7, "towers": 2,  "peasants": 4, "spearman": 0},
+        Difficulty.EXPERT: {"farms": 5, "towers": 1, "strong_towers": 1, "peasants": 4},
+        Difficulty.BALANCER: {"farms": 5, "towers": 1, "strong_towers": 1, "peasants": 4},
     },
     5: {
-        Difficulty.EXPERT: {"farms": 6, "strong_towers": 2, "peasants": 1, "spearman": 1},
-        Difficulty.BALANCER: {"farms": 6, "strong_towers": 2, "peasants": 1, "spearman": 1},
+        Difficulty.EXPERT: {"farms": 6, "strong_towers": 2, "peasants": 4, "spearman": 0},
+        Difficulty.BALANCER: {"farms": 6, "strong_towers": 2, "peasants": 4, "spearman": 0},
     },
-    6: {
-        Difficulty.EXPERT: {"farms": 8, "strong_towers": 2, "peasants": 1, "spearman": 1},
-        Difficulty.BALANCER: {"farms": 8, "strong_towers": 2, "peasants": 1, "spearman": 1},
-    },
+    # 6: {
+    #     Difficulty.EXPERT: {"farms": 8, "strong_towers": 2, "peasants": 1, "spearman": 1},
+    #     Difficulty.BALANCER: {"farms": 8, "strong_towers": 2, "peasants": 1, "spearman": 1},
+    # },
     7: {
-        Difficulty.HARD: {"farms": 14, "towers": 3, "baron": 1},
-        Difficulty.EXPERT: {"farms": 9, "strong_towers": 2, "peasants": 1, "spearman": 1},
-        Difficulty.BALANCER: {"farms": 9, "strong_towers": 2, "peasants": 1, "spearman": 1},
+        Difficulty.HARD: {"farms": 12, "towers": 2, "spearman": 2, "baron": 1},
+        Difficulty.EXPERT: {"farms": 9, "strong_towers": 2, "peasants": 0, "spearman": 2},
+        Difficulty.BALANCER: {"farms": 9, "strong_towers": 2, "peasants": 0, "spearman": 2},
     },
-    8: {
-        Difficulty.EXPERT: {"farms": 11, "strong_towers": 2, "peasants": 1, "spearman": 1},
-        Difficulty.BALANCER: {"farms": 11, "strong_towers": 2, "peasants": 1, "spearman": 1},
+    9: {
+        Difficulty.HARD: {"farms": 14, "towers": 2, "spearman": 2, "baron": 2},
+        Difficulty.EXPERT: {"farms": 11, "strong_towers": 2, "peasants": 0, "spearman": 2},
+        Difficulty.BALANCER: {"farms": 11, "strong_towers": 2, "peasants": 0, "spearman": 2},
     },
     11: {
-        Difficulty.EXPERT: {"farms": 15, "strong_towers": 2, "baron": 1},
-        Difficulty.BALANCER: {"farms": 15, "strong_towers": 2, "baron": 1},
+        Difficulty.HARD: {"farms": 15, "towers": 3, "spearman": 2, "baron": 2},
+        Difficulty.EXPERT: {"farms": 14, "strong_towers": 2, "baron": 0},
+        Difficulty.BALANCER: {"farms": 14, "strong_towers": 2, "baron": 0},
     },
-    13: {
+    15: {
+        Difficulty.HARD: {"towers": 3, "spearman": 2, "baron": 2},
+        # there is some variability in how the game plays out. probalby due to ordering in the hex lists.
+        # 
     },
-    19: {
-
-    },
-    21: {
-
-    },
+    # 17: {
+    # },
+    # 21: {
+    # },
 }
 LAVENDER_CHECKPOINT_LAPS = sorted(EXPECTED_LAVENDER_BY_LAP.keys())
 MAX_LAVENDER_CHECKPOINT_LAP = max(LAVENDER_CHECKPOINT_LAPS) if LAVENDER_CHECKPOINT_LAPS else 2

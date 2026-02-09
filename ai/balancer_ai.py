@@ -75,7 +75,6 @@ class AiBalancerDefaultV1(AbstractAI):
         attackable_hexes = self.find_attackable_hexes(hex.color, move_zone)
         if len(attackable_hexes) > 0:
             # Attack something
-            print(f"Trying to attack something with unit at {hex.coordinate1}, {hex.coordinate2}", "attackable_hexes:", attackable_hexes)
             self.try_to_attack_something(hex, attackable_hexes)
         else:
             # Nothing to attack - push unit to better defense if adjacent to enemy
@@ -201,7 +200,7 @@ class AiBalancerDefaultV1(AbstractAI):
         """Find most attractive hex to attack."""
         if self.is_difficulty_less_than(Difficulty.AVERAGE):
             if attackable_hexes:
-                    # find closest hex to source_hex
+                # find closest hex to source_hex
                 closest_hex = self.find_closest_hex(source_hex, attackable_hexes)
                 return closest_hex
             return None
@@ -424,7 +423,7 @@ class AiBalancerDefaultV1(AbstractAI):
         self.get_ruleset().update_move_zone_for_unit_construction(province, strength)
         move_zone = self.get_move_zone_manager().hexes
         attackable_hexes = self.find_attackable_hexes(province.get_color(), move_zone)
-        
+
         if len(attackable_hexes) == 0:
             return False
         source_hex = next((h for h in province.get_hexes() if h.piece == PieceType.CITY), None)
@@ -783,6 +782,10 @@ class AiBalancerDefaultV1(AbstractAI):
             return False
         
         merged_strength = self.get_strength(merge_result)
+        # only expert and balancer can merge to knights
+        if self.is_difficulty_less_than(Difficulty.EXPERT):
+            if merged_strength >= 4:
+                return False
         return self.can_afford_unit(province, merged_strength)
     
     def _get_trees_in_province(self, province) -> List:
@@ -795,7 +798,10 @@ class AiBalancerDefaultV1(AbstractAI):
         Uses same logic as update_move_zone_for_unit_construction (wave with limit).
         """
         mgr = self.get_move_zone_manager()
-        strength = self.get_strength(unit_hex.piece)
+        # setting strenght to high to force units to move towards the border
+        strength = 4
+        if self.is_difficulty_less_than(Difficulty.AVERAGE):
+            strength = self.get_strength(unit_hex.piece)
         mgr.update(unit_hex, limit, strength)
         return {h: limit - h.counter for h in mgr.hexes}
 
@@ -806,7 +812,8 @@ class AiBalancerDefaultV1(AbstractAI):
         Move to the first step that has the shortest distance to target.
         """
         mgr = self.get_move_zone_manager()
-        strength = self.get_strength(unit_hex.piece)
+        # setting strenght to high to force units to move towards the border
+        strength = 4
         mgr.update_for_unit(unit_hex)
         steps = list(mgr.hexes)
         self.exclude_friendly_units_from_move_zone(steps)
@@ -911,6 +918,7 @@ class AiBalancerDefaultV1(AbstractAI):
 
             targeted_trees = set()
             for unit_hex in peasants_to_trees:
+                # print(f"move_afk_units - peasants_to_trees - unit_hex: {unit_hex.coordinate1}, {unit_hex.coordinate2}")
                 if not self.is_ready(unit_hex):
                     continue
                 if not trees:
@@ -930,9 +938,11 @@ class AiBalancerDefaultV1(AbstractAI):
             ]
             others_by_strength = sorted(others, key=lambda h: self.get_strength(h.piece), reverse=True)
             for unit_hex in others_by_strength:
+                # print(f"move_afk_units - others_by_strength - unit_hex: {unit_hex.coordinate1}, {unit_hex.coordinate2}")
                 if not self.is_ready(unit_hex):
                     continue
                 reachable = self._get_reachable_with_marching_distances(unit_hex, 999)
+                # print(f"move_afk_units - others_by_strength - reachable: {reachable}")
                 target = self._find_closest_non_province_hex_by_marching(
                     unit_hex, province, reachable, enemy_distance_scale=0.8
                 )
