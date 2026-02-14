@@ -106,36 +106,39 @@ class AIManager:
     
     def process_ai_turns(self) -> None:
         """
-        Process AI turns until a human player's turn is reached.
-        
-        This loops through AI players, processing their turns until
-        a human player is the current entity.
+        Process AI turns until a human player's turn is reached or the game has ended.
         """
         if not self.active:
             return
         
         max_iterations = 100  # Prevent infinite loops
         iterations = 0
-        
+        game_end_manager = getattr(self.game_state, 'game_end_manager', None)
+
         while iterations < max_iterations:
+            # Stop as soon as the game is over (someone won: 80% or all opponents dead)
+            if game_end_manager and game_end_manager.is_game_ended():
+                break
+
             current_entity = self.game_state.entities_manager.get_current_entity()
             if not current_entity:
                 break
-            
+
             # If current entity is human, we're done
             if current_entity.is_human():
                 break
-            
+
             # If current entity is AI, process their turn
             if current_entity.is_artificial_intelligence():
                 processed = self.process_ai_turn()
                 if not processed:
-                    # AI turn couldn't be processed, break to avoid infinite loop
+                    break
+                # After AI turn, game may have ended (e.g. reached 80%); stop immediately
+                if game_end_manager and game_end_manager.is_game_ended():
                     break
             else:
-                # Unknown entity type, break
                 break
-            
+
             iterations += 1
 
     def set_active(self, active: bool) -> None:

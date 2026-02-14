@@ -1338,6 +1338,39 @@ def api_game_move_unit():
     return jsonify({'success': True, 'message': 'Unit moved successfully'})
 
 
+def _print_hex_ownership_table(game_state):
+    """Print a small table of hex count and % owned per player (victory condition) after end turn."""
+    if not game_state or not game_state.entities_manager or not game_state.entities_manager.entities:
+        return
+    rows = []
+    total_hexes = None
+    for entity in game_state.entities_manager.entities:
+        color = entity.color
+        color_name = color.value if hasattr(color, 'value') else str(color)
+        kind = 'Human' if entity.is_human() else 'AI'
+        label = f"{color_name} ({kind})"
+        stats = game_state.get_hex_ownership_stats(color)
+        if total_hexes is None:
+            total_hexes = stats['total_hexes']
+        rows.append((label, stats['player_hexes'], stats['percentage']))
+    if not rows:
+        return
+    col_label = 'Player'
+    col_hexes = 'Hexes'
+    col_pct = '%'
+    w_label = max(len(col_label), max(len(r[0]) for r in rows))
+    w_hexes = max(len(col_hexes), max(len(str(r[1])) for r in rows))
+    w_pct = max(len(col_pct), max(len(f"{r[2]:.1f}") for r in rows))
+    sep = f"  {'-' * w_label}  {'-' * w_hexes}  {'-' * w_pct}"
+    print(sep)
+    print(f"  {col_label:<{w_label}}  {col_hexes:>{w_hexes}}  {col_pct:>{w_pct}}")
+    print(sep)
+    for label, hexes, pct in rows:
+        print(f"  {label:<{w_label}}  {hexes:>{w_hexes}}  {pct:>{w_pct}.1f}")
+    print(sep)
+    print(f"  (total hexes: {total_hexes}, victory at 80%)")
+
+
 @app.route('/api/game/end-turn', methods=['POST'])
 def api_game_end_turn():
     """End the current player's turn."""
@@ -1387,6 +1420,9 @@ def api_game_end_turn():
         # The next /api/game/state call will return events since this point
         session_data['last_player_turn_event_count'] = last_player_turn_event_count
         
+        # Print hex ownership table after end turn (victory condition = % owned)
+        _print_hex_ownership_table(game_state)
+        
         # Get new current player after turn switch (and AI processing)
         new_current_entity = game_state.entities_manager.get_current_entity()
         new_current_color = new_current_entity.color.value if new_current_entity else None
@@ -1413,27 +1449,40 @@ def api_game_win_lose_status():
     if game_state is None:
         return jsonify({'success': False, 'error': 'Game state not available'}), 500
     
-    # Get current player
-    current_entity = game_state.entities_manager.get_current_entity()
-    if not current_entity:
-        return jsonify({'success': False, 'error': 'No current player'}), 400
+    # Report win/lose from the human player's perspective (so "you lost" when AI wins)
+    human_entity = None
+    for entity in (game_state.entities_manager.entities or []):
+        if entity.is_human():
+            human_entity = entity
+            break
+    if not human_entity:
+        return jsonify({'success': False, 'error': 'No human player'}), 400
     
-    current_color = current_entity.color
-    
-    # Check lose condition (no provinces)
-    is_dead = game_state.game_end_manager.check_player_lose(current_color)
-    
-    # Check win condition (all opponents dead OR 80% hexes)
-    has_won = False
-    if not is_dead:
-        has_won = game_state.game_end_manager.check_player_win(current_color)
-    
-    return jsonify({
+    human_color = human_entity.color
+    game_end_manager = game_state.game_end_manager
+    game_ended = game_end_manager.is_game_ended()
+    winner_color = game_end_manager.winner_color if game_ended else None
+
+    if game_ended:
+        # Game over: show win if human won, lose if someone else won
+        has_won = winner_color == human_color
+        is_dead = not has_won
+    else:
+        is_dead = game_end_manager.check_player_lose(human_color)
+        has_won = False
+        if not is_dead:
+            has_won = game_end_manager.check_player_win(human_color)
+
+    payload = {
         'success': True,
         'is_dead': is_dead,
         'has_won': has_won,
-        'current_color': current_color.value if hasattr(current_color, 'value') else str(current_color)
-    })
+        'game_ended': game_ended,
+        'current_color': human_color.value if hasattr(human_color, 'value') else str(human_color)
+    }
+    if game_ended and winner_color is not None:
+        payload['winner_color'] = winner_color.value if hasattr(winner_color, 'value') else str(winner_color)
+    return jsonify(payload)
 
 
 @app.route('/api/game/continue-after-lose', methods=['POST'])
