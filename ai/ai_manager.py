@@ -2,7 +2,7 @@
 
 from typing import Optional
 from core.game_state import GameState
-from core.enums import EntityType, RulesType, Difficulty
+from core.enums import EntityType, RulesType
 from ai.balancer_ai import AiBalancerDefaultV1
 try:
     from ai.random_ai import AiRandom
@@ -12,24 +12,22 @@ except ImportError:
 
 
 class AIManager:
-    """Manages AI players and their decision making."""
-    
-    def __init__(self, game_state: GameState, difficulty: Difficulty = Difficulty.AVERAGE):
+    """Manages AI players and their decision making. Each entity's difficulty is set on the entity (ai_difficulty)."""
+
+    def __init__(self, game_state: GameState):
         """
         Initialize AI manager.
-        
+
         Args:
             game_state: The game state
-            difficulty: AI difficulty level
         """
         self.game_state = game_state
-        self.difficulty = difficulty
         self.active = True
-        
+
         # Create AI instances
         self.ai_random = None
         self.ai_balancer_default: Optional[AiBalancerDefaultV1] = None
-        
+
         # Create AIs
         self.create_ais()
     
@@ -80,20 +78,24 @@ class AIManager:
     def process_ai_turn(self) -> bool:
         """
         Process AI turn if current player is AI.
+        Uses the current entity's ai_difficulty when set, otherwise Difficulty.AVERAGE (e.g. tests).
         
         Returns:
             True if AI turn was processed, False otherwise
         """
         if not self.active:
             return False
-        
+
         ai = self.get_current_ai()
         if not ai:
             return False
-        
-        # Set difficulty
-        ai.set_difficulty(self.difficulty)
-        
+
+        current_entity = self.game_state.entities_manager.get_current_entity()
+        assert current_entity is not None, "Current entity must exist when processing AI turn"
+        difficulty = current_entity.get_ai_difficulty()
+        assert difficulty is not None, "AI entity must have ai_difficulty set (e.g. at game init or in tests)"
+        ai.set_difficulty(difficulty)
+
         # Perform AI turn
         try:
             ai.perform()
@@ -135,11 +137,7 @@ class AIManager:
                 break
             
             iterations += 1
-    
-    def set_difficulty(self, difficulty: Difficulty) -> None:
-        """Set AI difficulty."""
-        self.difficulty = difficulty
-    
+
     def set_active(self, active: bool) -> None:
         """Set whether AI manager is active."""
         self.active = active

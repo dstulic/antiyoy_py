@@ -1,7 +1,10 @@
 """Player entity and entities management."""
 
-from typing import Optional, List
+from typing import Optional, List, TYPE_CHECKING
 from core.enums import EntityType, HColor, RelationType
+
+if TYPE_CHECKING:
+    from core.enums import Difficulty
 from core.events import IEventListener, AbstractEvent
 from core.enums import EventType
 
@@ -83,6 +86,8 @@ class PlayerEntity:
         self.color = color
         self.name = "-"
         self.relations: List[Relation] = []
+        # Per-player AI difficulty (only used when type is AI). None = use game default.
+        self.ai_difficulty: Optional["Difficulty"] = None
 
     def get_relation(self, other_entity: "PlayerEntity") -> Optional[Relation]:
         """Get relation with another entity."""
@@ -95,8 +100,11 @@ class PlayerEntity:
         return None
 
     def encode(self) -> str:
-        """Encode entity to string."""
-        return f"{self.type.value}>{self.color.value}>{self.name}"
+        """Encode entity to string. Optional 4th part is ai_difficulty value for AI entities."""
+        base = f"{self.type.value}>{self.color.value}>{self.name}"
+        if self.is_artificial_intelligence() and self.ai_difficulty is not None:
+            base += f">{self.ai_difficulty.value}"
+        return base
 
     def is_human(self) -> bool:
         """Check if entity is human."""
@@ -109,6 +117,14 @@ class PlayerEntity:
     def set_name(self, name: str) -> None:
         """Set entity name."""
         self.name = name
+
+    def get_ai_difficulty(self) -> Optional["Difficulty"]:
+        """Get this entity's AI difficulty (None = use game default). Only relevant for AI entities."""
+        return self.ai_difficulty
+
+    def set_ai_difficulty(self, difficulty: Optional["Difficulty"]) -> None:
+        """Set this entity's AI difficulty. Only relevant for AI entities."""
+        self.ai_difficulty = difficulty
 
     def __str__(self) -> str:
         """Return string representation."""
@@ -245,6 +261,12 @@ class EntitiesManager(IEventListener):
                 name = parts[2]
                 entity = PlayerEntity(self, entity_type, color)
                 entity.set_name(name)
+                if len(parts) >= 4 and entity_type.is_ai():
+                    from core.enums import Difficulty
+                    try:
+                        entity.set_ai_difficulty(Difficulty(parts[3]))
+                    except (ValueError, KeyError):
+                        pass
                 entities_list.append(entity)
             except (ValueError, KeyError):
                 continue
@@ -404,6 +426,12 @@ class EntitiesManager(IEventListener):
                 name = parts[2]
                 entity = PlayerEntity(self, entity_type, color)
                 entity.set_name(name)
+                if len(parts) >= 4 and entity_type.is_ai():
+                    from core.enums import Difficulty
+                    try:
+                        entity.set_ai_difficulty(Difficulty(parts[3]))
+                    except (ValueError, KeyError):
+                        pass
                 entities_list.append(entity)
             except (ValueError, KeyError):
                 continue

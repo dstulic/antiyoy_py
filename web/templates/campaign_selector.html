@@ -16,8 +16,7 @@
         
         <div class="campaign-levels">
             {% for level in levels %}
-            <div class="level-card {{ level.type }}" 
-                 onclick="selectLevel({{ level.index }})"
+            <div class="level-card {{ level.type }}"
                  data-level="{{ level.index }}"
                  data-type="{{ level.type }}"
                  data-difficulty="{{ level.difficulty }}">
@@ -32,7 +31,20 @@
             {% endfor %}
         </div>
     </div>
-    
+
+    <!-- AI selector modal (shown when clicking a level) -->
+    <div id="aiSelectorModal" class="ai-selector-modal" style="display: none;">
+        <div class="ai-selector-overlay" onclick="closeAiSelector()"></div>
+        <div class="ai-selector-content">
+            <h2 id="aiSelectorTitle">Level 0 – Select AI</h2>
+            <div id="aiSelectorRows" class="ai-selector-rows"></div>
+            <div class="ai-selector-actions">
+                <button type="button" class="ai-selector-btn cancel" onclick="closeAiSelector()">Cancel</button>
+                <button type="button" class="ai-selector-btn start" id="aiSelectorStartBtn" onclick="startGameFromSelector()">Start game</button>
+            </div>
+        </div>
+    </div>
+
     <script src="{{ url_for('static', filename='js/campaign.js') }}"></script>
 </body>
 </html>
