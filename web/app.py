@@ -81,6 +81,18 @@ def _apply_entity_difficulties(game_state, level_index, difficulties=None):
             entity.set_ai_difficulty(default_difficulty)
 
 
+def _assert_all_ai_difficulties_set(game_state) -> None:
+    """Raise ValueError if any AI entity has no ai_difficulty set (catches init/load bugs)."""
+    entities = getattr(game_state, 'entities_manager', None) and game_state.entities_manager.entities or []
+    for entity in entities:
+        if entity.is_artificial_intelligence() and entity.get_ai_difficulty() is None:
+            raise ValueError(
+                f"AI entity {entity.name} ({entity.color}) has no difficulty set. "
+                "Level/save must include difficulty for every AI (format: type>color>name>difficulty). "
+                "Start a new game from campaign and save again."
+            )
+
+
 @app.route('/')
 def index():
     """Landing page."""
@@ -274,6 +286,7 @@ def _do_game_init(level_index, difficulties=None):
         
         # Apply difficulty: per-entity when difficulties list provided, else campaign default for all AIs
         _apply_entity_difficulties(game_state, level_index, difficulties)
+        _assert_all_ai_difficulties_set(game_state)
         
         # Process AI turns to get to first human player's turn
         if game_state.ai_manager:
@@ -1019,7 +1032,10 @@ def api_game_load():
         # Decode game state
         from save_load.decoder import GameStateDecoder
         decoder = GameStateDecoder()
-        result = decoder.decode(level_code)
+        try:
+            result = decoder.decode(level_code)
+        except ValueError as e:
+            return jsonify({'success': False, 'error': str(e)}), 400
         
         if isinstance(result, tuple):
             game_state, campaign_level_index = result
@@ -1029,6 +1045,11 @@ def api_game_load():
         
         if game_state is None:
             return jsonify({'success': False, 'error': 'Failed to decode game state'}), 500
+        
+        try:
+            _assert_all_ai_difficulties_set(game_state)
+        except ValueError as e:
+            return jsonify({'success': False, 'error': str(e)}), 400
         
         # Create new session for the loaded game
         import uuid

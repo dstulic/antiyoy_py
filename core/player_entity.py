@@ -100,9 +100,14 @@ class PlayerEntity:
         return None
 
     def encode(self) -> str:
-        """Encode entity to string. Optional 4th part is ai_difficulty value for AI entities."""
+        """Encode entity to string. AI entities must have ai_difficulty (4th part)."""
         base = f"{self.type.value}>{self.color.value}>{self.name}"
-        if self.is_artificial_intelligence() and self.ai_difficulty is not None:
+        if self.is_artificial_intelligence():
+            if self.ai_difficulty is None:
+                raise ValueError(
+                    f"Cannot save: AI entity {self.name} has no difficulty set. "
+                    "Start a new game from campaign so difficulties are set."
+                )
             base += f">{self.ai_difficulty.value}"
         return base
 
@@ -261,12 +266,21 @@ class EntitiesManager(IEventListener):
                 name = parts[2]
                 entity = PlayerEntity(self, entity_type, color)
                 entity.set_name(name)
-                if len(parts) >= 4 and entity_type.is_ai():
+                if entity_type.is_ai():
+                    if len(parts) < 4:
+                        raise ValueError(
+                            "AI entity must have difficulty in level/save. "
+                            "Format: type>color>name>difficulty (e.g. ai_balancer>red>Name>average). "
+                            "Start a new game from campaign and save again."
+                        )
                     from core.enums import Difficulty
                     try:
                         entity.set_ai_difficulty(Difficulty(parts[3]))
-                    except (ValueError, KeyError):
-                        pass
+                    except (ValueError, KeyError) as e:
+                        raise ValueError(
+                            f"Invalid AI difficulty '{parts[3]}' for entity {name}. "
+                            "Valid: easy, average, hard, expert, balancer."
+                        ) from e
                 entities_list.append(entity)
             except (ValueError, KeyError):
                 continue
@@ -426,12 +440,21 @@ class EntitiesManager(IEventListener):
                 name = parts[2]
                 entity = PlayerEntity(self, entity_type, color)
                 entity.set_name(name)
-                if len(parts) >= 4 and entity_type.is_ai():
+                if entity_type.is_ai():
+                    if len(parts) < 4:
+                        raise ValueError(
+                            "AI entity must have difficulty in level/save. "
+                            "Format: type>color>name>difficulty (e.g. ai_balancer>red>Name>average). "
+                            "Start a new game from campaign and save again."
+                        )
                     from core.enums import Difficulty
                     try:
                         entity.set_ai_difficulty(Difficulty(parts[3]))
-                    except (ValueError, KeyError):
-                        pass
+                    except (ValueError, KeyError) as e:
+                        raise ValueError(
+                            f"Invalid AI difficulty '{parts[3]}' for entity {name}. "
+                            "Valid: easy, average, hard, expert, balancer."
+                        ) from e
                 entities_list.append(entity)
             except (ValueError, KeyError):
                 continue

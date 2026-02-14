@@ -86,6 +86,13 @@ function saveGame() {
     toggleMenu();
 }
 
+function recenterView() {
+    if (gameBoard && gameBoard.hexes && gameBoard.hexes.length > 0) {
+        gameBoard.centerView();
+        gameBoard.render();
+    }
+}
+
 function exitGame() {
     if (confirm('Are you sure you want to exit? Unsaved progress will be lost.')) {
         window.location.href = '/';

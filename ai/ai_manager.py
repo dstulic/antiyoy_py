@@ -78,7 +78,7 @@ class AIManager:
     def process_ai_turn(self) -> bool:
         """
         Process AI turn if current player is AI.
-        Uses the current entity's ai_difficulty when set, otherwise Difficulty.AVERAGE (e.g. tests).
+        Uses the current entity's ai_difficulty (must be set at game init or in save).
         
         Returns:
             True if AI turn was processed, False otherwise
@@ -93,7 +93,11 @@ class AIManager:
         current_entity = self.game_state.entities_manager.get_current_entity()
         assert current_entity is not None, "Current entity must exist when processing AI turn"
         difficulty = current_entity.get_ai_difficulty()
-        assert difficulty is not None, "AI entity must have ai_difficulty set (e.g. at game init or in tests)"
+        assert difficulty is not None, (
+            "AI entity must have ai_difficulty set. "
+            "Level/save may be missing difficulty (format: type>color>name>difficulty). "
+            "Start a new game from campaign or re-save."
+        )
         ai.set_difficulty(difficulty)
 
         # Perform AI turn

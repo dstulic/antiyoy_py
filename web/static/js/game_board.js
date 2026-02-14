@@ -36,6 +36,15 @@ class GameBoard {
         this.panStartOffsetY = 0;
         this.minScale = 0.3;
         this.maxScale = 3.0;
+        // Primary-button (left) pan: distinguish drag from click so drag doesn't trigger hex click
+        this.leftPanPointerDown = false;
+        this.leftPanStartX = 0;
+        this.leftPanStartY = 0;
+        this.leftPanStartOffsetX = 0;
+        this.leftPanStartOffsetY = 0;
+        this.leftButtonPan = false;
+        this.ignoreNextClick = false;
+        this.PAN_THRESHOLD_PX = 5;
         
         this.init();
         this.preloadPieceImages();
@@ -140,10 +149,13 @@ class GameBoard {
     }
     
     setHexes(hexes) {
+        // Only recenter on first load (initial level); preserve pan/zoom on refresh (e.g. after placement)
+        const firstLoad = this.hexes.length === 0;
         this.hexes = hexes;
-        this.centerView();
+        if (firstLoad) {
+            this.centerView();
+        }
         // Only render if animation loop is not running (to avoid conflicts)
-        // If animation loop is running, it will handle rendering
         if (!this._animationLoopRunning) {
             this.render();
         }
@@ -608,27 +620,36 @@ class GameBoard {
     }
     
     handleMouseMove(e) {
+        const rect = this.canvas.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+
+        // Primary button drag: commit to pan once movement exceeds threshold (don't cancel/complete placement)
+        if (!this.isPanning && this.leftPanPointerDown && (e.buttons & 1)) {
+            const dx = mouseX - this.leftPanStartX;
+            const dy = mouseY - this.leftPanStartY;
+            if (Math.sqrt(dx * dx + dy * dy) >= this.PAN_THRESHOLD_PX) {
+                this.isPanning = true;
+                this.leftButtonPan = true;
+                this.panStartX = this.leftPanStartX;
+                this.panStartY = this.leftPanStartY;
+                this.panStartOffsetX = this.leftPanStartOffsetX;
+                this.panStartOffsetY = this.leftPanStartOffsetY;
+                this.canvas.style.cursor = 'grabbing';
+            }
+        }
+
         if (this.isPanning) {
             // Pan the map
-            const rect = this.canvas.getBoundingClientRect();
-            const mouseX = e.clientX - rect.left;
-            const mouseY = e.clientY - rect.top;
-            
             const deltaX = mouseX - this.panStartX;
             const deltaY = mouseY - this.panStartY;
-            
             this.offsetX = this.panStartOffsetX + deltaX;
             this.offsetY = this.panStartOffsetY + deltaY;
-            
             this.render();
             return;
         }
         
         // Handle hover for defense indicators
-        const rect = this.canvas.getBoundingClientRect();
-        const mouseX = e.clientX - rect.left;
-        const mouseY = e.clientY - rect.top;
-        
         // Convert mouse position to hex coordinates
         const worldX = (mouseX - this.offsetX) / this.scale;
         const worldY = (mouseY - this.offsetY) / this.scale;
@@ -724,6 +745,16 @@ class GameBoard {
     }
     
     handleMouseDown(e) {
+        // Primary button (left): record for potential pan; commit to pan only after move > threshold
+        if (e.button === 0) {
+            this.leftPanPointerDown = true;
+            const rect = this.canvas.getBoundingClientRect();
+            this.leftPanStartX = e.clientX - rect.left;
+            this.leftPanStartY = e.clientY - rect.top;
+            this.leftPanStartOffsetX = this.offsetX;
+            this.leftPanStartOffsetY = this.offsetY;
+            return;
+        }
         // Middle mouse button (button 1) for panning
         if (e.button === 1) {
             e.preventDefault();
@@ -738,7 +769,27 @@ class GameBoard {
     }
     
     handleMouseUp(e) {
+        if (e.button === 0) {
+            if (this.leftButtonPan) {
+                this.ignoreNextClick = true;
+            }
+            this.isPanning = false;
+            this.leftButtonPan = false;
+            this.leftPanPointerDown = false;
+            this.canvas.style.cursor = 'default';
+            return;
+        }
         if (e.button === 1) {
+            // Middle button: if we didn't move much, treat as "recenter" click (browsers don't fire 'click' for middle button)
+            const rect = this.canvas.getBoundingClientRect();
+            const endX = e.clientX - rect.left;
+            const endY = e.clientY - rect.top;
+            const dx = endX - this.panStartX;
+            const dy = endY - this.panStartY;
+            if (Math.sqrt(dx * dx + dy * dy) < this.PAN_THRESHOLD_PX) {
+                this.centerView();
+                this.render();
+            }
             this.isPanning = false;
             this.canvas.style.cursor = 'default';
         }
@@ -746,7 +797,12 @@ class GameBoard {
     
     handleMouseLeave(e) {
         // Stop panning if mouse leaves canvas
+        if (this.leftPanPointerDown || this.leftButtonPan) {
+            this.ignoreNextClick = true;
+        }
         this.isPanning = false;
+        this.leftButtonPan = false;
+        this.leftPanPointerDown = false;
         this.canvas.style.cursor = 'default';
         
         // Clear defense indicators on mouse leave
@@ -760,25 +816,11 @@ class GameBoard {
     }
     
     handleClick(e) {
-        // Middle mouse button click to recenter
-        if (e.button === 1) {
-            e.preventDefault();
-            const rect = this.canvas.getBoundingClientRect();
-            const x = e.clientX - rect.left;
-            const y = e.clientY - rect.top;
-            
-            // Convert click position to world coordinates
-            const worldX = (x - this.offsetX) / this.scale;
-            const worldY = (y - this.offsetY) / this.scale;
-            
-            // Recenter view on this position
-            this.offsetX = this.canvas.width / 2 - worldX * this.scale;
-            this.offsetY = this.canvas.height / 2 - worldY * this.scale;
-            
-            this.render();
+        // Ignore left click if it was part of a pan drag (don't complete/cancel placement or select hex)
+        if (e.button === 0 && this.ignoreNextClick) {
+            this.ignoreNextClick = false;
             return;
         }
-        
         // Left click for hex selection (existing behavior)
         const rect = this.canvas.getBoundingClientRect();
         const x = e.clientX - rect.left;
