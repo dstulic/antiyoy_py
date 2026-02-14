@@ -176,6 +176,13 @@ def api_game_init(level_index):
         if game_state.fog_of_war_manager and game_state.fog_of_war_manager.enabled:
             game_state.fog_of_war_manager.apply_update()
         
+        # Apply campaign difficulty to AI (matches antiyoy_hd ProcessCampaign.applyCampaignDifficulty)
+        if game_state.ai_manager:
+            from campaign.manager import CampaignManager
+            campaign_manager = CampaignManager()
+            difficulty = campaign_manager.get_difficulty(level_index)
+            game_state.ai_manager.set_difficulty(difficulty)
+        
         # Process AI turns to get to first human player's turn
         if game_state.ai_manager:
             game_state.ai_manager.process_ai_turns()

@@ -67,9 +67,8 @@
             overflow: hidden;
             position: relative;
         }
-        /* Status bar and actions bar - hidden by default, shown in edit mode */
+        /* Status bar - always visible; actions bar - hidden by default, shown in edit mode */
         #editStatusBar, #editActionsBar {
-            display: none;
             position: relative !important; /* Override fixed positioning from game.css */
             top: auto !important;
             left: auto !important;
@@ -77,7 +76,13 @@
             z-index: 10;
             flex-shrink: 0;
         }
-        .edit-mode #editStatusBar, .edit-mode #editActionsBar {
+        #editStatusBar {
+            display: flex;
+        }
+        #editActionsBar {
+            display: none;
+        }
+        .edit-mode #editActionsBar {
             display: flex;
         }
         /* Game board should fill remaining space and have no margin */
@@ -93,9 +98,9 @@
         .edit-mode #testGameBoard {
             height: calc(100vh - 50px - 70px - 60px); /* 50px status + 70px actions + ~60px test controls */
         }
-        /* When not in edit mode, account for test controls only */
+        /* When not in edit mode, account for test controls + status bar */
         .test-runner-container:not(.edit-mode) #testGameBoard {
-            height: calc(100vh - 60px); /* ~60px for test controls */
+            height: calc(100vh - 60px - 50px); /* ~60px test controls + 50px status bar */
         }
         /* Override build-menu-inline to use flex-start layout (left-aligned) */
         #editBuildMenu.build-menu-inline {
@@ -235,9 +240,18 @@
             // Piece values come from the backend as enum values (e.g., 'PEASANT', 'SPEARMAN')
             // The original game.js checks for lowercase, but backend sends uppercase enum values
             const pieceStr = String(piece).toLowerCase();
-            return pieceStr === 'peasant' || pieceStr === 'spearman' || 
+            return pieceStr === 'peasant' || pieceStr === 'spearman' ||
                    pieceStr === 'baron' || pieceStr === 'knight';
         }
+        // Stubs for game_board.js callbacks (status bar is updated by our wrapper + updateStatusBarForHex)
+        function updateProvinceStatus(hex) {
+            if (typeof updateStatusBarForHex === 'function') updateStatusBarForHex(hex);
+        }
+        function hideProvinceStatus() {
+            if (typeof updateStatusBarForHex === 'function') updateStatusBarForHex(null);
+        }
+        function closeBuildMenu() {}
+        function showBuildMenu() {}
     </script>
     <script>
         let currentTestName = '{{ test_name }}';
@@ -376,9 +390,46 @@
             }
         }
         
+        /** Return the hex (or border hex) under the click event, or null. */
+        function getHexAtClickEvent(e) {
+            if (!gameBoard || !gameBoard.canvas) return null;
+            const rect = gameBoard.canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            const worldX = (x - gameBoard.offsetX) / gameBoard.scale;
+            const worldY = (y - gameBoard.offsetY) / gameBoard.scale;
+            const effectiveHexSize = gameBoard.hexSize * gameBoard.spacingMultiplier;
+            const hexCoords = pixelToHex(worldX, worldY, effectiveHexSize);
+            const hex = gameBoard.hexes && gameBoard.hexes.find(h =>
+                h.coordinate1 === hexCoords.q && h.coordinate2 === hexCoords.r
+            );
+            if (hex) return hex;
+            if (gameBoard.borderHexes) {
+                const borderHex = gameBoard.borderHexes.find(bh =>
+                    bh.coordinate1 === hexCoords.q && bh.coordinate2 === hexCoords.r
+                );
+                if (borderHex) return borderHex;
+            }
+            return null;
+        }
+
         function loadGameState(data) {
             console.log('loadGameState called with', data.hexes?.length || 0, 'hexes');
             if (data.hexes && gameBoard) {
+                // Once: wrap handleClick so status bar updates on every hex click (any mode)
+                if (!gameBoard._statusBarWrapDone) {
+                    gameBoard._statusBarWrapDone = true;
+                    const nativeHandleClick = gameBoard.handleClick.bind(gameBoard);
+                    gameBoard.handleClick = function(e) {
+                        nativeHandleClick(e);
+                        // Always update status bar from the hex that was actually clicked
+                        const clickedHex = getHexAtClickEvent(e);
+                        updateStatusBarForHex(clickedHex);
+                        if (!editMode) {
+                            updateEditStatusBar();
+                        }
+                    };
+                }
                 console.log('Setting hexes on game board');
                 gameBoard.setHexes(data.hexes);
                 if (data.current_color) {
@@ -392,6 +443,8 @@
                 gameBoard.resize();
                 // Render the board (will automatically draw placeholder hexes if in edit mode)
                 gameBoard.render();
+                // Update status bar (Turn, Owned)
+                updateEditStatusBar();
                 console.log('Game state loaded and rendered');
             } else {
                 console.warn('Cannot load game state:', {
@@ -1072,31 +1125,83 @@
         }
         
         function updateEditStatusBar() {
-            // Fetch current state to update status bar
+            // Fetch current state to update status bar (Turn, Owned %)
             fetch('/api/unit_tests/state', {
                 credentials: 'include'
             })
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
-                    // Update status bar elements
                     const statusOwnedHex = document.getElementById('editStatusOwnedHex');
                     if (statusOwnedHex && data.owned_hex_percentage !== undefined) {
                         statusOwnedHex.textContent = data.owned_hex_percentage.toFixed(1) + '%';
                     }
-                    
                     const statusTurn = document.getElementById('editStatusTurn');
                     if (statusTurn && data.lap !== undefined) {
                         statusTurn.textContent = (data.lap + 1).toString();
                     }
-                    
-                    // For edit mode, we can show province info when a hex is selected
-                    // This will be updated when a hex is clicked
                 }
             })
             .catch(error => {
                 console.error('Error updating edit status bar:', error);
             });
+        }
+
+        /** Update status bar Hex, Funds, Profit, City name from a selected hex (edit or play mode). */
+        function updateStatusBarForHex(hex) {
+            const coordsEl = document.getElementById('editStatusCoordinates');
+            if (coordsEl) {
+                coordsEl.textContent = hex ? `${hex.coordinate1}, ${hex.coordinate2}` : '-';
+            }
+            if (!hex) {
+                const statusCityName = document.getElementById('editStatusCityName');
+                const statusFunds = document.getElementById('editStatusFunds');
+                const statusProfit = document.getElementById('editStatusProfit');
+                if (statusCityName) statusCityName.textContent = '-';
+                if (statusFunds) statusFunds.textContent = '-';
+                if (statusProfit) { statusProfit.textContent = '-'; statusProfit.className = 'status-value'; }
+                return;
+            }
+            fetch(`/api/unit_tests/province/${hex.coordinate1}/${hex.coordinate2}`, { credentials: 'include' })
+                .then(response => response.json())
+                .then(data => {
+                    const statusCityName = document.getElementById('editStatusCityName');
+                    const statusFunds = document.getElementById('editStatusFunds');
+                    const statusProfit = document.getElementById('editStatusProfit');
+                    if (statusCityName) {
+                        statusCityName.textContent = (data.success && data.province_id != null && data.province_id !== -1)
+                            ? (data.city_name || '-') : (editMode ? 'Edit Mode' : '-');
+                    }
+                    if (statusFunds) {
+                        statusFunds.textContent = (data.success && data.province_id != null && data.province_id !== -1)
+                            ? (data.money != null ? String(data.money) : '0') : '-';
+                    }
+                    if (statusProfit) {
+                        if (data.success && data.province_id != null && data.province_id !== -1 && data.profit != null) {
+                            statusProfit.textContent = String(data.profit);
+                            statusProfit.className = 'status-value ' + (data.profit >= 0 ? 'positive' : 'negative');
+                        } else {
+                            statusProfit.textContent = '-';
+                            statusProfit.className = 'status-value';
+                        }
+                    }
+                })
+                .catch(() => {
+                    const statusCityName = document.getElementById('editStatusCityName');
+                    const statusFunds = document.getElementById('editStatusFunds');
+                    const statusProfit = document.getElementById('editStatusProfit');
+                    if (statusCityName) statusCityName.textContent = '-';
+                    if (statusFunds) statusFunds.textContent = '-';
+                    if (statusProfit) { statusProfit.textContent = '-'; statusProfit.className = 'status-value'; }
+                });
+        }
+
+        /** Update status bar from current board selection (used after any hex click when not in edit mode). */
+        function updateStatusBarFromSelection() {
+            if (!gameBoard) return;
+            const hex = gameBoard.selectedHex || gameBoard.selectedBorderHex || null;
+            updateStatusBarForHex(hex);
+            updateEditStatusBar();
         }
         
         function editUndoAction() {

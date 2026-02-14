@@ -50,32 +50,23 @@ class MoveZoneManager:
                 if self.game_state.ruleset:
                     if not self.game_state.ruleset.can_hex_be_captured(hex, self._strength):
                         return False
-                # Check diplomacy (if diplomacy manager exists)
-                if self._start_entity and hasattr(self.game_state, 'diplomacy_manager') and self.game_state.diplomacy_manager:
-                    if not self.game_state.diplomacy_manager.is_attack_allowed(
-                        self._start_entity, hex
-                    ):
-                        return False
             
             return True
 
         def action(parent_hex: Optional[Hex], hex: Hex) -> None:
             """Action when hex is added to movement zone."""
             if parent_hex is not None:
-                # Set counter to parent's counter - 1
+                # Set counter to parent's counter - 1 (movement remaining after entering this hex)
                 hex.counter = parent_hex.counter - 1
                 # Safety check: counter should never be negative
                 if hex.counter < 0:
                     hex.counter = 0
-                # Safety check: if counter is 0, we've reached the limit, don't add this hex
-                # This prevents hexes beyond the limit from being added
-                if hex.counter == 0:
-                    return
+                # When counter is 0 we're at the limit: still add this hex to the zone,
+                # but propagation will stop (condition requires parent counter > 0).
             else:
                 # Start hex gets the limit
                 hex.counter = self._limit
-            
-            # Only add hex if we haven't exceeded the limit
+
             self.hexes.append(hex)
 
         self._wave_worker = WaveWorker(condition, action)
@@ -90,6 +81,7 @@ class MoveZoneManager:
 
     def update(self, start_hex: Hex, limit: int, strength: int) -> None:
         """Update movement zone with given parameters."""
+        saved_limit = self._limit
         self._limit = limit
         self._strength = strength
         self._start_hex = start_hex
@@ -125,8 +117,10 @@ class MoveZoneManager:
             # If distance > limit, this is a bug - log it but don't add the hex
             elif distance > limit:
                 # This should never happen, but if it does, we filter it out
+                print(f"WARNING: MoveZoneManager returned hex at distance {distance} (should be <= {limit})")
                 pass
         self.hexes = filtered_hexes
+        self._limit = saved_limit
 
     def clear(self) -> None:
         """Clear movement zone."""

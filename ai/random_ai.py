@@ -9,18 +9,6 @@ from core.enums import PieceType
 from core.core_utils import is_unit
 
 
-class DiplomaticAiEasy:
-    """Simple diplomatic AI (placeholder)."""
-    
-    def __init__(self, game_state: GameState):
-        """Initialize diplomatic AI."""
-        self.game_state = game_state
-    
-    def apply(self) -> None:
-        """Apply diplomatic AI."""
-        pass
-
-
 class AiRandom(AbstractAI):
     """Random AI that makes random moves."""
 
@@ -48,10 +36,6 @@ class AiRandom(AbstractAI):
             if province.get_color() != current_color:
                 continue
             self._apply_province(province)
-
-    def get_diplomatic_ai(self):
-        """Get diplomatic AI."""
-        return DiplomaticAiEasy(self.game_state)
 
     def _apply_province(self, province: Province) -> None:
         """Apply AI to a province."""

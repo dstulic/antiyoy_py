@@ -80,7 +80,6 @@ class GameState(IEventListener):
         
         self.construction_manager = None
         self.city_manager = None
-        self.diplomacy_manager = None
         self.letters_manager = None
 
     def get_hex(self, coordinate1: int, coordinate2: int) -> Optional[Hex]:

@@ -6,11 +6,6 @@ from commands.types import (
     MoveUnitCommand,
     BuildPieceCommand,
     EndTurnCommand,
-    SetRelationCommand,
-    SendLetterCommand,
-    ApplyLetterCommand,
-    DeclineLetterCommand,
-    GiveMoneyCommand,
 )
 from core.game_state import GameState
 from core.enums import HColor, PieceType
@@ -57,16 +52,6 @@ class CommandValidator:
             return self._validate_build_piece(command, player_color)
         elif isinstance(command, EndTurnCommand):
             return self._validate_end_turn(player_color)
-        elif isinstance(command, SetRelationCommand):
-            return self._validate_set_relation(command, player_color)
-        elif isinstance(command, SendLetterCommand):
-            return self._validate_send_letter(command, player_color)
-        elif isinstance(command, ApplyLetterCommand):
-            return self._validate_apply_letter(command, player_color)
-        elif isinstance(command, DeclineLetterCommand):
-            return self._validate_decline_letter(command, player_color)
-        elif isinstance(command, GiveMoneyCommand):
-            return self._validate_give_money(command, player_color)
         else:
             return False, f"Unknown command type: {command.command_type}"
 
@@ -219,29 +204,4 @@ class CommandValidator:
         """Validate end turn command."""
         if not self._is_player_turn(player_color):
             return False, "Not your turn"
-        return True, None
-
-    def _validate_set_relation(self, command: SetRelationCommand, player_color: HColor) -> tuple[bool, Optional[str]]:
-        """Validate set relation command."""
-        # Placeholder - would need diplomacy manager
-        return True, None
-
-    def _validate_send_letter(self, command: SendLetterCommand, player_color: HColor) -> tuple[bool, Optional[str]]:
-        """Validate send letter command."""
-        # Placeholder - would need letters manager
-        return True, None
-
-    def _validate_apply_letter(self, command: ApplyLetterCommand, player_color: HColor) -> tuple[bool, Optional[str]]:
-        """Validate apply letter command."""
-        # Placeholder - would need letters manager
-        return True, None
-
-    def _validate_decline_letter(self, command: DeclineLetterCommand, player_color: HColor) -> tuple[bool, Optional[str]]:
-        """Validate decline letter command."""
-        # Placeholder - would need letters manager
-        return True, None
-
-    def _validate_give_money(self, command: GiveMoneyCommand, player_color: HColor) -> tuple[bool, Optional[str]]:
-        """Validate give money command."""
-        # Placeholder - would need diplomacy manager
         return True, None

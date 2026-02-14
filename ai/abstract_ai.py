@@ -20,8 +20,7 @@ class AbstractAI(ABC):
         self.game_state = game_state
         self.random = random.Random()
         self.difficulty: Optional[Difficulty] = None
-        self.diplomatic_ai = self.get_diplomatic_ai()
-        self.temp_list: List = []  # Temporary list for operations
+        self.temp_list: list = []  # Temporary list for operations
 
     def perform(self) -> None:
         """
@@ -29,11 +28,23 @@ class AbstractAI(ABC):
         
         This is the main entry point that:
         1. Applies the AI's decision making (apply())
-        2. Handles diplomatic actions
-        3. Ends the turn
+        2. Ends the turn
         """
+        print(f"Performing AI turn for {self.game_state.entities_manager.get_current_color()}")
+        current_entity = self.game_state.entities_manager.get_current_entity()
+        if current_entity:
+            current_color = current_entity.color
+            ruleset = self.game_state.ruleset
+            economics = self.game_state.economics_manager
+            for province in self.game_state.provinces_manager.provinces:
+                if province.get_color() != current_color:
+                    continue
+                name = province.get_city_name()
+                money = province.get_money()
+                income = economics.calculate_province_income(province) if economics else 0
+                farm_cost = ruleset.get_price(province, PieceType.FARM) if ruleset else 0
+                print(f"  {name}: money={money}, income/turn={income}, farm_cost={farm_cost}")
         self.apply()
-        self._check_to_apply_diplomatic_ai()
         self._command_turn_end()
 
     def set_difficulty(self, difficulty: Difficulty) -> None:
@@ -64,29 +75,11 @@ class AbstractAI(ABC):
         """
         pass
 
-    @abstractmethod
-    def get_diplomatic_ai(self):
-        """
-        Get the diplomatic AI instance for this AI.
-        
-        Returns:
-            DiplomaticAI instance
-        """
-        pass
-
-    def _check_to_apply_diplomatic_ai(self) -> None:
-        """Check and apply diplomatic AI if diplomacy is enabled."""
-        # Placeholder - would need diplomacy manager
-        # if not self.game_state.diplomacy_manager or not self.game_state.diplomacy_manager.enabled:
-        #     return
-        # self.diplomatic_ai.apply()
-        pass
-
     def _command_turn_end(self) -> None:
         """Command the turn to end."""
         from commands.types import EndTurnCommand
         from commands.executor import CommandExecutor
-        
+        print(f"Commanding turn end for {self.game_state.entities_manager.get_current_color()}")
         executor = CommandExecutor(self.game_state)
         command = EndTurnCommand()
         executor.execute(command, self.game_state.entities_manager.get_current_color())
@@ -156,9 +149,31 @@ class AbstractAI(ABC):
             Difficulty.EXPERT,
             Difficulty.BALANCER,
         ]
-        # This is a simplified check - in practice, difficulty comparison is more complex
-        return False  # Default to allowing all features
-    
+        try:
+            current_idx = difficulty_order.index(self.difficulty)
+            given_idx = difficulty_order.index(difficulty)
+            return current_idx < given_idx
+        except ValueError:
+            return False
+
+    def current_difficulty_as_string(self):
+        """Get difficulty as string."""
+        match self.difficulty:
+            case Difficulty.TUTORIAL:
+                return "Tutorial"
+            case Difficulty.EASY:
+                return "Easy"
+            case Difficulty.AVERAGE:
+                return "Average"
+            case Difficulty.HARD:
+                return "Hard"
+            case Difficulty.EXPERT:
+                return "Expert"
+            case Difficulty.BALANCER:
+                return "Balancer"
+            case _:
+                return "Unknown"
+
     def command_unit_build(self, province, hex, strength):
         """Command building a unit."""
         from core.core_utils import get_unit_by_strength
@@ -173,7 +188,8 @@ class AbstractAI(ABC):
         command = BuildPieceCommand(
             hex=hex,
             piece_type=piece_type,
-            province_id=province.get_id()
+            province_id=province.get_id(),
+            province_hex=province.get_first_hex()
         )
         success, _ = executor.execute(command, self.get_current_color())
         return success

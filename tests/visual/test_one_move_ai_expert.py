@@ -10,22 +10,22 @@ from ai.ai_manager import AIManager
 
 
 # Shared map filename for all difficulty variants
-ONE_MOVE_AI_MAP = "one_move_ai.map"
+ONE_MOVE_AI_MAP_EXPERT = "one_move_ai_expert.map"
 
 
-@visual_test("one move ai easy", "Execute a single AI move (easy) on level 2")
-class OneMoveAIEasyTest(VisualTest):
+@visual_test("one move ai expert easy", "Execute a single AI move (easy) on level 2")
+class OneMoveAIExpertEasyTest(VisualTest):
     """One AI move with EASY difficulty."""
 
     def get_map_file_path(self) -> Path:
         maps_dir = Path(__file__).parent / "maps"
         maps_dir.mkdir(parents=True, exist_ok=True)
-        return maps_dir / ONE_MOVE_AI_MAP
+        return maps_dir / ONE_MOVE_AI_MAP_EXPERT
 
     def setup(self) -> GameState:
         game_state = self.load_map()
         if game_state is None:
-            raise ValueError("Failed to load one_move_ai.map - map file is required")
+            raise ValueError("Failed to load one_move_ai_expert.map - map file is required")
         return game_state
 
     def run(self, game_state: GameState) -> GameState:
@@ -36,19 +36,19 @@ class OneMoveAIEasyTest(VisualTest):
         return game_state
 
 
-@visual_test("one move ai average", "Execute a single AI move (average) on level 2")
-class OneMoveAIAverageTest(VisualTest):
+@visual_test("one move ai expert average", "Execute a single AI move (average) on level 2")
+class OneMoveAIExpertAverageTest(VisualTest):
     """One AI move with AVERAGE difficulty."""
 
     def get_map_file_path(self) -> Path:
         maps_dir = Path(__file__).parent / "maps"
         maps_dir.mkdir(parents=True, exist_ok=True)
-        return maps_dir / ONE_MOVE_AI_MAP
+        return maps_dir / ONE_MOVE_AI_MAP_EXPERT
 
     def setup(self) -> GameState:
         game_state = self.load_map()
         if game_state is None:
-            raise ValueError("Failed to load one_move_ai.map - map file is required")
+            raise ValueError("Failed to load one_move_ai_expert.map - map file is required")
         return game_state
 
     def run(self, game_state: GameState) -> GameState:
@@ -59,19 +59,19 @@ class OneMoveAIAverageTest(VisualTest):
         return game_state
 
 
-@visual_test("one move ai hard", "Execute a single AI move (hard) on level 2")
-class OneMoveAIHardTest(VisualTest):
+@visual_test("one move ai expert hard", "Execute a single AI move (hard) on level 2")
+class OneMoveAIExpertHardTest(VisualTest):
     """One AI move with HARD difficulty."""
 
     def get_map_file_path(self) -> Path:
         maps_dir = Path(__file__).parent / "maps"
         maps_dir.mkdir(parents=True, exist_ok=True)
-        return maps_dir / ONE_MOVE_AI_MAP
+        return maps_dir / ONE_MOVE_AI_MAP_EXPERT
 
     def setup(self) -> GameState:
         game_state = self.load_map()
         if game_state is None:
-            raise ValueError("Failed to load one_move_ai.map - map file is required")
+            raise ValueError("Failed to load one_move_ai_expert.map - map file is required")
         return game_state
 
     def run(self, game_state: GameState) -> GameState:
@@ -82,19 +82,19 @@ class OneMoveAIHardTest(VisualTest):
         return game_state
 
 
-@visual_test("one move ai expert", "Execute a single AI move (expert) on level 2")
-class OneMoveAIExpertTest(VisualTest):
+@visual_test("one move ai expert expert", "Execute a single AI move (expert) on level 2")
+class OneMoveAIExpertExpertTest(VisualTest):
     """One AI move with EXPERT difficulty."""
 
     def get_map_file_path(self) -> Path:
         maps_dir = Path(__file__).parent / "maps"
         maps_dir.mkdir(parents=True, exist_ok=True)
-        return maps_dir / ONE_MOVE_AI_MAP
+        return maps_dir / ONE_MOVE_AI_MAP_EXPERT
 
     def setup(self) -> GameState:
         game_state = self.load_map()
         if game_state is None:
-            raise ValueError("Failed to load one_move_ai.map - map file is required")
+            raise ValueError("Failed to load one_move_ai_expert.map - map file is required")
         return game_state
 
     def run(self, game_state: GameState) -> GameState:
@@ -105,14 +105,14 @@ class OneMoveAIExpertTest(VisualTest):
         return game_state
 
 
-@visual_test("one move ai balancer", "Execute a single AI move (balancer) on level 2")
-class OneMoveAIBalancerTest(VisualTest):
+@visual_test("one move ai expert balancer", "Execute a single AI move (balancer) on level 2")
+class OneMoveAIExpertBalancerTest(VisualTest):
     """One AI move with BALANCER difficulty."""
 
     def get_map_file_path(self) -> Path:
         maps_dir = Path(__file__).parent / "maps"
         maps_dir.mkdir(parents=True, exist_ok=True)
-        return maps_dir / ONE_MOVE_AI_MAP
+        return maps_dir / ONE_MOVE_AI_MAP_EXPERT
 
     def setup(self) -> GameState:
         game_state = self.load_map()
@@ -161,41 +161,41 @@ def _print_move_zone_for_unit_at_32(game_state: GameState) -> None:
 def _run_one_move_ai_for_difficulty(difficulty: Difficulty) -> tuple:
     """Run one move AI test for a given difficulty; returns (initial, final) states."""
     _classes = {
-        Difficulty.EASY: OneMoveAIEasyTest,
-        Difficulty.AVERAGE: OneMoveAIAverageTest,
-        Difficulty.HARD: OneMoveAIHardTest,
-        Difficulty.EXPERT: OneMoveAIExpertTest,
-        Difficulty.BALANCER: OneMoveAIBalancerTest,
+        Difficulty.EASY: OneMoveAIExpertEasyTest,
+        Difficulty.AVERAGE: OneMoveAIExpertAverageTest,
+        Difficulty.HARD: OneMoveAIExpertHardTest,
+        Difficulty.EXPERT: OneMoveAIExpertExpertTest,
+        Difficulty.BALANCER: OneMoveAIExpertBalancerTest,
     }
     test = _classes[difficulty](f"one move ai {difficulty.value}", f"One AI move ({difficulty.value})")
     return test.execute()
 
 
-def test_one_move_ai_easy():
+def test_one_move_ai_expert_easy():
     """Run one move AI test with EASY difficulty."""
     initial, final = _run_one_move_ai_for_difficulty(Difficulty.EASY)
     _assert_ai_made_move(initial, final)
 
 
-def test_one_move_ai_average():
+def test_one_move_ai_expert_average():
     """Run one move AI test with AVERAGE difficulty."""
     initial, final = _run_one_move_ai_for_difficulty(Difficulty.AVERAGE)
     _assert_ai_made_move(initial, final)
 
 
-def test_one_move_ai_hard():
+def test_one_move_ai_expert_hard():
     """Run one move AI test with HARD difficulty."""
     initial, final = _run_one_move_ai_for_difficulty(Difficulty.HARD)
     _assert_ai_made_move(initial, final)
 
 
-def test_one_move_ai_expert():
+def test_one_move_ai_expert_expert():
     """Run one move AI test with EXPERT difficulty."""
     initial, final = _run_one_move_ai_for_difficulty(Difficulty.EXPERT)
     _assert_ai_made_move(initial, final)
 
 
-def test_one_move_ai_balancer():
+def test_one_move_ai_expert_balancer():
     """Run one move AI test with BALANCER difficulty."""
     initial, final = _run_one_move_ai_for_difficulty(Difficulty.BALANCER)
     _assert_ai_made_move(initial, final)
