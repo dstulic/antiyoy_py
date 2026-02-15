@@ -234,3 +234,68 @@ body {
     transform: translateY(-1px);
     box-shadow: 0 4px 10px rgba(244, 67, 54, 0.4);
 }
+
+/* Replay selector dialog - spacious */
+.replay-dialog-content {
+    max-width: 720px;
+    width: 95%;
+    max-height: 85vh;
+}
+.replay-dialog-body {
+    padding: 24px;
+    min-height: 300px;
+}
+.replays-list {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+.replay-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 20px;
+    background: #f8f8f8;
+    border-radius: 10px;
+    border: 1px solid #e0e0e0;
+    transition: all 0.2s ease;
+}
+.replay-item:hover {
+    background: #f0f0f0;
+    border-color: #667eea;
+}
+.replay-info {
+    flex: 1;
+    min-width: 0;
+}
+.replay-name {
+    font-weight: 600;
+    font-size: 1.05em;
+    color: #333;
+    margin-bottom: 6px;
+}
+.replay-path {
+    font-size: 0.9em;
+    color: #666;
+    word-break: break-all;
+}
+.replay-open-btn {
+    padding: 12px 24px;
+    margin-left: 16px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: all 0.2s ease;
+}
+.replay-open-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+.replay-empty, .replay-error {
+    padding: 24px;
+    text-align: center;
+    color: #666;
+}

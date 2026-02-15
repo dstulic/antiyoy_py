@@ -135,6 +135,12 @@ def game(level_index):
     return render_template('game.html', level_index=level_index)
 
 
+@app.route('/replay')
+def replay_page():
+    """Replay viewer page (path to replay file passed as query param)."""
+    return render_template('replay.html')
+
+
 @app.route('/api/campaign/levels')
 def api_campaign_levels():
     """API endpoint to get campaign levels."""
@@ -1126,6 +1132,196 @@ def api_game_delete_save():
         return jsonify({'success': True, 'message': 'Save file deleted successfully'})
     except Exception as e:
         return jsonify({'success': False, 'error': f'Error deleting save: {str(e)}'}), 500
+
+
+# --- Replay ---
+REPLAYS_DIR = PROJECT_ROOT / "replays"
+
+
+def _game_state_to_replay_json(game_state):
+    """Build the same shape as api_game_state response from a game_state (all hexes visible, no session)."""
+    visible_hexes = game_state.hexes if not (game_state.fog_of_war_manager and game_state.fog_of_war_manager.enabled) else game_state.get_hexes_for_player(None)
+    hexes = []
+    for hex in visible_hexes:
+        hex_data = {
+            'coordinate1': hex.coordinate1,
+            'coordinate2': hex.coordinate2,
+            'color': hex.color.value if hasattr(hex.color, 'value') else str(hex.color),
+            'piece': hex.piece.value if hex.piece and hasattr(hex.piece, 'value') else None,
+            'unit_id': hex.unit_id,
+            'is_ready': False,
+        }
+        hexes.append(hex_data)
+    entities = []
+    entity_stats = []
+    if hasattr(game_state, 'entities_manager') and game_state.entities_manager and game_state.entities_manager.entities:
+        for entity in game_state.entities_manager.entities:
+            entity_data = {
+                'type': entity.type.value if hasattr(entity.type, 'value') else str(entity.type),
+                'color': entity.color.value if hasattr(entity.color, 'value') else str(entity.color),
+                'name': entity.name,
+            }
+            entities.append(entity_data)
+            stats = game_state.get_hex_ownership_stats(entity.color)
+            money = 0
+            income = 0
+            for prov in game_state.provinces_manager.provinces:
+                if prov.get_color() == entity.color:
+                    money += prov.get_money()
+                    if game_state.economics_manager:
+                        income += game_state.economics_manager.calculate_province_income(prov)
+            entity_stats.append({
+                'type': entity_data['type'],
+                'color': entity_data['color'],
+                'name': entity.name,
+                'hex_pct': round(stats['percentage'], 1),
+                'money': money,
+                'income': income,
+            })
+    turn_index = getattr(game_state.turns_manager, 'turn_index', 0) if game_state.turns_manager else 0
+    lap = getattr(game_state.turns_manager, 'lap', 0) if game_state.turns_manager else 0
+    return {
+        'success': True,
+        'hexes': hexes,
+        'entities': entities,
+        'entity_stats': entity_stats,
+        'turn_index': turn_index,
+        'lap': lap,
+    }
+
+
+@app.route('/api/replays/list', methods=['GET'])
+def api_replays_list():
+    """List all .replay files in replays/ and subfolders (relative paths)."""
+    try:
+        if not REPLAYS_DIR.exists():
+            return jsonify({'success': True, 'replays': []})
+        replays = []
+        for path in sorted(REPLAYS_DIR.rglob("*.replay")):
+            try:
+                rel = path.relative_to(REPLAYS_DIR)
+                replays.append({'path': str(rel).replace("\\", "/"), 'name': path.name})
+            except ValueError:
+                continue
+        return jsonify({'success': True, 'replays': replays})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/replay/content', methods=['GET'])
+def api_replay_content():
+    """Get initial and final level code for a replay. path = relative path under replays/."""
+    path_arg = request.args.get('path', '').strip()
+    if not path_arg:
+        return jsonify({'success': False, 'error': 'path required'}), 400
+    # Prevent directory traversal
+    if '..' in path_arg or path_arg.startswith('/'):
+        return jsonify({'success': False, 'error': 'Invalid path'}), 400
+    try:
+        full_path = (REPLAYS_DIR / path_arg).resolve()
+        full_path.relative_to(REPLAYS_DIR.resolve())
+        if not full_path.is_file():
+            return jsonify({'success': False, 'error': 'Replay not found'}), 404
+        with open(full_path, 'r', encoding='utf-8') as f:
+            final_level_code = f.read()
+    except ValueError:
+        return jsonify({'success': False, 'error': 'Replay not found'}), 404
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+    from save_load.format import get_section, has_section, SECTION_ORIGINAL_LEVEL_CODE
+    import base64
+    initial_level_code = None
+    if has_section(final_level_code, SECTION_ORIGINAL_LEVEL_CODE):
+        raw = get_section(final_level_code, SECTION_ORIGINAL_LEVEL_CODE)
+        if raw and raw.strip() and raw.strip() != '-':
+            try:
+                initial_level_code = base64.b64decode(raw.strip()).decode('utf-8')
+            except Exception:
+                initial_level_code = None
+    if not initial_level_code:
+        initial_level_code = final_level_code
+
+    # Decode states and get events list from final replay (events_list is in the save format)
+    def decode_state(level_code):
+        try:
+            from save_load.decoder import GameStateDecoder
+            from save_load.decoder import _build_adjacency_graph
+            decoder = GameStateDecoder()
+            result = decoder.decode(level_code)
+            if isinstance(result, tuple):
+                game_state, _ = result
+            else:
+                game_state = result
+            if game_state is None:
+                return None
+            _build_adjacency_graph(game_state)
+            return _game_state_to_replay_json(game_state)
+        except Exception:
+            return None
+
+    def decode_final_and_events(level_code):
+        """Decode final level code and return (state_json, events_list). events_list items are encoded strings like 'um 1 2 3 4'."""
+        try:
+            from save_load.decoder import GameStateDecoder
+            from save_load.decoder import _build_adjacency_graph
+            decoder = GameStateDecoder()
+            result = decoder.decode(level_code)
+            if isinstance(result, tuple):
+                game_state, _ = result
+            else:
+                game_state = result
+            if game_state is None:
+                return None, []
+            _build_adjacency_graph(game_state)
+            state = _game_state_to_replay_json(game_state)
+            events = []
+            if getattr(game_state, 'history_manager', None) and getattr(game_state.history_manager, 'events_list', None):
+                for he in game_state.history_manager.events_list:
+                    if getattr(he, 'event', None):
+                        events.append(he.event.encode())
+            return state, events
+        except Exception:
+            return None, []
+
+    initial_state = decode_state(initial_level_code)
+    final_state, events_list = decode_final_and_events(final_level_code)
+    if not final_state:
+        return jsonify({'success': False, 'error': 'Failed to decode replay'}), 500
+    if not initial_state:
+        initial_state = final_state
+
+    return jsonify({
+        'success': True,
+        'initial_state': initial_state,
+        'final_state': final_state,
+        'events': events_list,
+    })
+
+
+@app.route('/api/replay/state', methods=['POST'])
+def api_replay_state():
+    """Decode a level code and return game state JSON for replay viewer (no session)."""
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'error': 'No data provided'}), 400
+    level_code = data.get('level_code', '').strip()
+    if not level_code:
+        return jsonify({'success': False, 'error': 'level_code required'}), 400
+    try:
+        from save_load.decoder import GameStateDecoder
+        from save_load.decoder import _build_adjacency_graph
+        decoder = GameStateDecoder()
+        result = decoder.decode(level_code)
+        if isinstance(result, tuple):
+            game_state, _ = result
+        else:
+            game_state = result
+        if game_state is None:
+            return jsonify({'success': False, 'error': 'Failed to decode level code'}), 500
+        _build_adjacency_graph(game_state)
+        return jsonify(_game_state_to_replay_json(game_state))
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 @app.route('/api/game/undo', methods=['POST'])

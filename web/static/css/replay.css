@@ -1,0 +1,154 @@
+/* Replay viewer */
+
+.replay-container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    width: 100vw;
+    overflow: hidden;
+    background: #1a1a2e;
+}
+
+.replay-control-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    background: #16213e;
+    color: #eee;
+    flex-shrink: 0;
+}
+
+.replay-control-left { flex: 0 0 auto; }
+.replay-control-center {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.replay-btn {
+    padding: 8px 14px;
+    background: #0f3460;
+    color: #e8e8e8;
+    border: 1px solid #533483;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 1em;
+}
+.replay-btn:hover:not(:disabled) {
+    background: #533483;
+}
+.replay-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.replay-home-btn { font-size: 1.2em; }
+
+.replay-board-wrap {
+    flex: 1;
+    position: relative;
+    min-height: 0;
+}
+
+.replay-board {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: #1a1a2e;
+}
+
+.replay-board .game-loading {
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(26, 26, 46, 0.9);
+    z-index: 10;
+}
+
+.replay-board canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+.replay-status-overlay {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    z-index: 100;
+    background: rgba(15, 52, 96, 0.92);
+    border: 1px solid #533483;
+    border-radius: 8px;
+    color: #eee;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+}
+
+.replay-status-toggle {
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    background: rgba(83, 52, 131, 0.8);
+    border: none;
+    border-radius: 4px;
+    color: #eee;
+    cursor: pointer;
+    font-size: 10px;
+    line-height: 1;
+}
+.replay-status-toggle:hover {
+    background: #533483;
+}
+
+.replay-status-content {
+    padding: 28px 12px 12px 12px;
+    min-width: 180px;
+}
+
+.replay-status-turn {
+    font-weight: 600;
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid rgba(255,255,255,0.2);
+    color: #e8e8e8;
+}
+
+.replay-status-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+.replay-status-table th,
+.replay-status-table td {
+    padding: 4px 8px;
+    text-align: left;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+.replay-status-table th {
+    font-weight: 600;
+    color: #b8b8d0;
+}
+.replay-status-table td { color: #e8e8e8; }
+.replay-status-table tr:last-child td { border-bottom: none; }
+
+.replay-status-overlay.collapsed .replay-status-content { display: none; }
+.replay-status-overlay.collapsed .replay-status-toggle { transform: rotate(180deg); }
+
+.replay-board .game-loading {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: #aaa;
+    font-size: 1.2em;
+}
