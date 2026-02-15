@@ -4,11 +4,6 @@ from typing import Optional
 from core.game_state import GameState
 from core.enums import EntityType, RulesType
 from ai.balancer_ai import AiBalancerDefaultV1
-try:
-    from ai.random_ai import AiRandom
-except ImportError:
-    # AiRandom not implemented yet
-    AiRandom = None
 
 
 class AIManager:
@@ -25,7 +20,6 @@ class AIManager:
         self.active = True
 
         # Create AI instances
-        self.ai_random = None
         self.ai_balancer_default: Optional[AiBalancerDefaultV1] = None
 
         # Create AIs
@@ -33,8 +27,6 @@ class AIManager:
     
     def create_ais(self) -> None:
         """Create AI instances."""
-        if AiRandom:
-            self.ai_random = AiRandom(self.game_state)
         self.ai_balancer_default = AiBalancerDefaultV1(self.game_state)
     
     def get_ai_for_entity(self, entity) -> Optional:
@@ -50,9 +42,7 @@ class AIManager:
         if not entity or not entity.is_artificial_intelligence():
             return None
         
-        if entity.type == EntityType.AI_RANDOM:
-            return self.ai_random
-        elif entity.type == EntityType.AI_BALANCER:
+        if entity.type == EntityType.AI_BALANCER:
             return self.get_balancer_ai()
         
         return None

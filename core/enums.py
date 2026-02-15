@@ -54,7 +54,6 @@ class EntityType(Enum):
 
     HUMAN = "human"
     NET_ENTITY = "net_entity"
-    AI_RANDOM = "ai_random"
     AI_BALANCER = "ai_balancer"
     SPECTATOR = "spectator"
     DEAD_BY_DEFAULT = "dead_by_default"
@@ -70,7 +69,6 @@ class EntityType(Enum):
     def is_ai(self) -> bool:
         """Check if entity type is an AI."""
         return self in (
-            EntityType.AI_RANDOM,
             EntityType.AI_BALANCER,
             EntityType.AI_EASY,
             EntityType.AI_AVERAGE,
