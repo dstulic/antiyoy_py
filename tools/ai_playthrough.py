@@ -131,10 +131,17 @@ def _run_game(
     turn_count = 0
     ai_manager = game_state.ai_manager
     game_end_manager = game_state.game_end_manager
+    hex_count = len(game_state.hexes)
+    n_entities = len(game_state.entities_manager.entities or [])
+    max_turns = (hex_count * 10 * n_entities) if n_entities else 1
 
     while True:
         game_manager.update()
         if game_end_manager.is_game_ended():
+            break
+
+        if turn_count >= max_turns:
+            print(f"Max turns reached ({max_turns}).", file=sys.stderr)
             break
 
         current_entity = game_state.entities_manager.get_current_entity()
