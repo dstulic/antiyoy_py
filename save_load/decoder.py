@@ -10,8 +10,6 @@ from save_load.format import (
     SECTION_PROVINCES,
     SECTION_RULES,
     SECTION_TURN,
-    SECTION_DIPLOMACY,
-    SECTION_MAIL_BASKET,
     SECTION_FOG,
     SECTION_CORE_INIT,
     SECTION_RNG_STATE,
@@ -106,8 +104,7 @@ class GameStateDecoder:
             self._decode_ready(game_state, level_code)
             self._decode_rules(game_state, level_code)
             self._decode_turn(game_state, level_code)
-            # Optional sections
-            self._decode_mail_basket(game_state, level_code)
+            # Optional sections (client_init, camera, diplomacy, mail_basket, etc. are skipped)
             self._decode_fog(game_state, level_code)
             self._decode_rng_state(game_state, level_code)
             self._decode_events_list(game_state, level_code)
@@ -346,11 +343,6 @@ class GameStateDecoder:
         if not source:
             return
         game_state.turns_manager.decode(source)
-
-    def _decode_mail_basket(self, game_state: GameState, level_code: str) -> None:
-        """Decode mail basket section."""
-        # Placeholder - letters manager not yet implemented
-        pass
 
     def _decode_fog(self, game_state: GameState, level_code: str) -> None:
         """Decode fog of war section."""

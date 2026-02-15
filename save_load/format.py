@@ -6,8 +6,6 @@ from typing import Optional, Dict
 
 # Section name constants
 SECTION_TITLE = "onliyoy_level_code"
-SECTION_CLIENT_INIT = "client_init"
-SECTION_CAMERA = "camera"
 SECTION_CORE_INIT = "core_init"
 SECTION_HEXES = "hexes"
 SECTION_CORE_CURRENT_IDS = "core_current_ids"
@@ -16,17 +14,22 @@ SECTION_PROVINCES = "provinces"
 SECTION_READY = "ready"
 SECTION_RULES = "rules"
 SECTION_TURN = "turn"
-SECTION_DIPLOMACY = "diplomacy"
-SECTION_MAIL_BASKET = "mail_basket"
 SECTION_FOG = "fog"
-SECTION_STARTING_HEXES = "starting_hexes"
 SECTION_EVENTS_LIST = "events_list"
-SECTION_STARTING_PROVINCES = "starting_provinces"
-SECTION_EDITOR = "editor"
 SECTION_CAMPAIGN = "campaign"
 SECTION_PAUSE_NAME = "pause_name"
 SECTION_RNG_STATE = "rng_state"
 SECTION_ORIGINAL_LEVEL_CODE = "original_level_code"
+
+# Unused sections: vestiges of the original game format. Still appear in campaign/levels.py
+# but are never encoded by us and are skipped during decoding (get_section may still find them).
+# SECTION_CLIENT_INIT = "client_init"
+# SECTION_CAMERA = "camera"
+# SECTION_DIPLOMACY = "diplomacy"
+# SECTION_MAIL_BASKET = "mail_basket"
+# SECTION_STARTING_HEXES = "starting_hexes"
+# SECTION_STARTING_PROVINCES = "starting_provinces"
+# SECTION_EDITOR = "editor"
 
 
 def get_section(level_code: str, section_name: str) -> Optional[str]:

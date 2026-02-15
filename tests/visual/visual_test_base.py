@@ -128,13 +128,7 @@ class VisualTest(ABC):
         map_file = self.get_map_file_path()
         try:
             encoder = GameStateEncoder()
-            # Use default client_init and camera for visual tests
-            level_code = encoder.encode(
-                game_state,
-                client_init="small,-1",
-                camera="0.65 1.04 1.0",
-                campaign_level_index=-1
-            )
+            level_code = encoder.encode(game_state, campaign_level_index=-1)
             
             with open(map_file, 'w') as f:
                 f.write(level_code)
