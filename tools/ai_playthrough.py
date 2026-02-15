@@ -20,6 +20,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from campaign.levels import get_level_code
 from save_load.decoder import GameStateDecoder
+from save_load.replay import save_replay
 from core.game_state import GameState
 from core.game_manager import GameManager, GameMode
 from core.enums import EventType, Difficulty
@@ -126,6 +127,7 @@ def _run_game(
     game_manager: GameManager,
     human_ai_difficulty: Difficulty,
     turn_interval: int,
+    level_index: int,
 ) -> None:
     """Run the game loop: human is played by an AI; every turn_interval turns print count and hex table; print result on end."""
     turn_count = 0
@@ -187,6 +189,21 @@ def _run_game(
     print(f"\nresult: {result}")
     print(f"turn count: {turn_count}")
 
+    # Save replay when game end condition is reached
+    source_details = f"{level_index}-{human_ai_difficulty.value}-{turn_count}"
+    replays_dir = PROJECT_ROOT / "replays"
+    saved_path = save_replay(
+        game_state,
+        source="ai",
+        source_details=source_details,
+        campaign_level_index=level_index,
+        replays_dir=str(replays_dir),
+    )
+    if saved_path:
+        print(f"replay saved: {saved_path}")
+    else:
+        print("warning: failed to save replay", file=sys.stderr)
+
 
 def main() -> int:
     args = _parse_args()
@@ -202,7 +219,7 @@ def main() -> int:
         return 1
     game_state, game_manager = pair
 
-    _run_game(game_state, game_manager, human_difficulty, turn_interval=args.turn)
+    _run_game(game_state, game_manager, human_difficulty, turn_interval=args.turn, level_index=level_index)
     return 0
 
 

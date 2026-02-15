@@ -324,6 +324,7 @@ def _do_game_init(level_index, difficulties=None):
             'game_state': game_state,
             'game_manager': game_manager,
             'level_index': level_index,
+            'difficulties': difficulties,  # list like ["human", "easy", "expert"] for replay filename
             'created_at': time.time(),
             'last_player_turn_event_count': last_player_turn_event_count
         }
@@ -1441,6 +1442,29 @@ def api_game_end_turn():
         # The next /api/game/state call will return events since this point
         session_data['last_player_turn_event_count'] = last_player_turn_event_count
         
+        # Save replay when game end condition is reached (once per game)
+        if game_state.game_end_manager.is_game_ended() and not session_data.get('replay_saved'):
+            level_index = session_data.get('level_index', 0)
+            ai_levels = []
+            for e in (game_state.entities_manager.entities or []):
+                if e.is_artificial_intelligence() and e.get_ai_difficulty():
+                    ai_levels.append(e.get_ai_difficulty().value)
+            source_details = f"human-{level_index}-{'-'.join(ai_levels) if ai_levels else 'ai'}"
+            try:
+                from save_load.replay import save_replay
+                replays_dir = os.path.join(os.path.dirname(__file__), '..', 'replays')
+                saved_path = save_replay(
+                    game_state,
+                    source="web",
+                    source_details=source_details,
+                    campaign_level_index=level_index,
+                    replays_dir=replays_dir,
+                )
+                if saved_path:
+                    session_data['replay_saved'] = True
+            except Exception:
+                pass  # Don't fail the request if replay save fails
+        
         # Print hex ownership table after end turn (victory condition = % owned)
         _print_hex_ownership_table(game_state)
         
@@ -1503,6 +1527,29 @@ def api_game_win_lose_status():
     }
     if game_ended and winner_color is not None:
         payload['winner_color'] = winner_color.value if hasattr(winner_color, 'value') else str(winner_color)
+
+    # Save replay when game ended (if not already saved in end-turn flow)
+    if game_ended and not session_data.get('replay_saved'):
+        level_index = session_data.get('level_index', 0)
+        ai_levels = []
+        for e in (game_state.entities_manager.entities or []):
+            if e.is_artificial_intelligence() and e.get_ai_difficulty():
+                ai_levels.append(e.get_ai_difficulty().value)
+        source_details = f"human-{level_index}-{'-'.join(ai_levels) if ai_levels else 'ai'}"
+        try:
+            from save_load.replay import save_replay
+            replays_dir = os.path.join(os.path.dirname(__file__), '..', 'replays')
+            saved_path = save_replay(
+                game_state,
+                source="web",
+                source_details=source_details,
+                campaign_level_index=level_index,
+                replays_dir=replays_dir,
+            )
+            if saved_path:
+                session_data['replay_saved'] = True
+        except Exception:
+            pass
     return jsonify(payload)
 
 
