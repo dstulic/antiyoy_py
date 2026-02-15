@@ -145,6 +145,21 @@ class MockGameState:
         from core.game_end_manager import GameEndManager
         self.game_end_manager = GameEndManager(self)
 
+    def get_hex_ownership_stats(self, player_color: Optional[HColor] = None) -> dict:
+        """Return hex ownership stats for game end checks (mock)."""
+        total_hexes = len(self.hexes) if self.hexes else 0
+        player_hexes = 0
+        if self.hexes and player_color:
+            for h in self.hexes:
+                if h.color == player_color and h.get_province() is not None:
+                    player_hexes += 1
+        percentage = (player_hexes / total_hexes * 100) if total_hexes > 0 else 0.0
+        return {
+            'total_hexes': total_hexes,
+            'player_hexes': player_hexes,
+            'percentage': percentage,
+        }
+
 
 class TestDeathManager:
     """Tests for DeathManager class."""

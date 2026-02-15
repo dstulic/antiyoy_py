@@ -154,9 +154,17 @@ class AiSpendMoneyEasyTest(VisualTest):
     def run(self, game_state: GameState) -> GameState:
         _assert_ready_ai_unit_at_32(game_state)
         _print_move_zone_for_unit_at_32(game_state)
-        ai_manager = AIManager(game_state, Difficulty.EASY)
+        _set_all_ai_difficulties(game_state, Difficulty.EASY)
+        ai_manager = AIManager(game_state)
         _run_until_lap(game_state, ai_manager, MAX_LAVENDER_CHECKPOINT_LAP, Difficulty.EASY)
         return game_state
+
+
+def _set_all_ai_difficulties(game_state: GameState, difficulty: Difficulty) -> None:
+    """Set ai_difficulty on all AI entities (for tests)."""
+    for entity in (game_state.entities_manager.entities or []):
+        if entity.is_artificial_intelligence():
+            entity.set_ai_difficulty(difficulty)
 
 
 @visual_test("ai spend money average", "AI spend money (average)")
@@ -177,7 +185,8 @@ class AiSpendMoneyAverageTest(VisualTest):
     def run(self, game_state: GameState) -> GameState:
         _assert_ready_ai_unit_at_32(game_state)
         _print_move_zone_for_unit_at_32(game_state)
-        ai_manager = AIManager(game_state, Difficulty.AVERAGE)
+        _set_all_ai_difficulties(game_state, Difficulty.AVERAGE)
+        ai_manager = AIManager(game_state)
         _run_until_lap(game_state, ai_manager, MAX_LAVENDER_CHECKPOINT_LAP, Difficulty.AVERAGE)
         return game_state
 
@@ -200,7 +209,8 @@ class AiSpendMoneyHardTest(VisualTest):
     def run(self, game_state: GameState) -> GameState:
         _assert_ready_ai_unit_at_32(game_state)
         _print_move_zone_for_unit_at_32(game_state)
-        ai_manager = AIManager(game_state, Difficulty.HARD)
+        _set_all_ai_difficulties(game_state, Difficulty.HARD)
+        ai_manager = AIManager(game_state)
         _run_until_lap(game_state, ai_manager, MAX_LAVENDER_CHECKPOINT_LAP, Difficulty.HARD)
         return game_state
 
@@ -223,7 +233,8 @@ class AiSpendMoneyExpertTest(VisualTest):
     def run(self, game_state: GameState) -> GameState:
         _assert_ready_ai_unit_at_32(game_state)
         _print_move_zone_for_unit_at_32(game_state)
-        ai_manager = AIManager(game_state, Difficulty.EXPERT)
+        _set_all_ai_difficulties(game_state, Difficulty.EXPERT)
+        ai_manager = AIManager(game_state)
         _run_until_lap(game_state, ai_manager, MAX_LAVENDER_CHECKPOINT_LAP, Difficulty.EXPERT)
         return game_state
 
@@ -246,7 +257,8 @@ class AiSpendMoneyBalancerTest(VisualTest):
     def run(self, game_state: GameState) -> GameState:
         _assert_ready_ai_unit_at_32(game_state)
         _print_move_zone_for_unit_at_32(game_state)
-        ai_manager = AIManager(game_state, Difficulty.BALANCER)
+        _set_all_ai_difficulties(game_state, Difficulty.BALANCER)
+        ai_manager = AIManager(game_state)
         _run_until_lap(game_state, ai_manager, MAX_LAVENDER_CHECKPOINT_LAP, Difficulty.BALANCER)
         return game_state
 

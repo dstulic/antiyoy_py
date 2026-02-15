@@ -7,7 +7,7 @@ from core.player_entity import (
     EntitiesManager,
     TurnsManager,
 )
-from core.enums import EntityType, HColor, RelationType, EventType
+from core.enums import EntityType, HColor, RelationType, EventType, Difficulty
 from core.events import EventTurnEnd
 
 
@@ -299,6 +299,7 @@ class TestEntitiesManager:
         entity1.set_name("Player1")
         entity2 = PlayerEntity(manager, EntityType.AI_BALANCER, HColor.BLUE)
         entity2.set_name("AI1")
+        entity2.set_ai_difficulty(Difficulty.AVERAGE)
         manager.initialize([entity1, entity2])
         encoded = manager.encode()
         new_manager = EntitiesManager(None)

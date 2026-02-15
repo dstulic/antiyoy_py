@@ -138,6 +138,23 @@ class MockGameState:
         # Create game end manager (real one, but it won't mark games as ended for single-player scenarios)
         from core.game_end_manager import GameEndManager
         self.game_end_manager = GameEndManager(self)
+        self.hexes = getattr(self, 'hexes', [])  # may be set by tests that need it
+
+    def get_hex_ownership_stats(self, player_color: Optional[HColor] = None) -> dict:
+        """Return hex ownership stats for game end checks (mock)."""
+        hexes = getattr(self, 'hexes', None) or []
+        total_hexes = len(hexes)
+        player_hexes = 0
+        if hexes and player_color:
+            for h in hexes:
+                if h.color == player_color and h.get_province() is not None:
+                    player_hexes += 1
+        percentage = (player_hexes / total_hexes * 100) if total_hexes > 0 else 0.0
+        return {
+            'total_hexes': total_hexes,
+            'player_hexes': player_hexes,
+            'percentage': percentage,
+        }
 
 
 class TestEconomicsManager:

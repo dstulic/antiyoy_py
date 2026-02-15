@@ -57,10 +57,9 @@ class GameState(IEventListener):
         from core.history_manager import HistoryManager
         self.history_manager = HistoryManager(self)
         
-        # AI manager - handles AI player turns
+        # AI manager - handles AI player turns (per-entity difficulty set at game init)
         from ai.ai_manager import AIManager
-        from core.enums import Difficulty
-        self.ai_manager = AIManager(self, Difficulty.AVERAGE)
+        self.ai_manager = AIManager(self)
         
         # Move zone manager - calculates valid movement hexes for units
         from core.move_zone_manager import MoveZoneManager

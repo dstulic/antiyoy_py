@@ -53,7 +53,7 @@ class GameEndManager(IEventListener):
         return color in self.dead_players
     
     def _check_game_end(self) -> None:
-        """Check if game has ended (all provinces are one color)."""
+        """Check if game has ended: one color owns all, or any player has won (80% or all opponents dead)."""
         if self.game_ended:
             return
         
@@ -62,28 +62,32 @@ class GameEndManager(IEventListener):
             return
         
         # Only check for game end if there are multiple players
-        # Single-player scenarios shouldn't trigger game end
         if not self.game_state.entities_manager or not self.game_state.entities_manager.entities:
             return
         
-        # Count distinct player colors (non-AI players)
+        # Count distinct player colors (human or AI)
         player_colors = set()
         for entity in self.game_state.entities_manager.entities:
             if entity.is_human() or entity.is_artificial_intelligence():
                 player_colors.add(entity.color)
         
-        # If there's only one player, don't check for game end
         if len(player_colors) <= 1:
             return
         
-        # Check if all provinces are the same color
+        # Win condition 1: any player has won (80% hexes or all opponents dead)
+        for entity in self.game_state.entities_manager.entities:
+            if self.is_player_dead(entity.color):
+                continue
+            if self.check_player_win(entity.color):
+                self.game_ended = True
+                self.winner_color = entity.color
+                return
+        
+        # Win condition 2: all provinces are the same color
         first_color = provinces[0].get_color()
         for province in provinces:
             if province.get_color() != first_color:
-                # Game hasn't ended - multiple colors still exist
                 return
-        
-        # All provinces are the same color - game has ended
         self.game_ended = True
         self.winner_color = first_color
     

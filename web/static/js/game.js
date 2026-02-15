@@ -86,6 +86,13 @@ function saveGame() {
     toggleMenu();
 }
 
+function recenterView() {
+    if (gameBoard && gameBoard.hexes && gameBoard.hexes.length > 0) {
+        gameBoard.centerView();
+        gameBoard.render();
+    }
+}
+
 function exitGame() {
     if (confirm('Are you sure you want to exit? Unsaved progress will be lost.')) {
         window.location.href = '/';
@@ -774,15 +781,32 @@ function checkWinLoseStatus() {
         .then(data => {
             if (data.success) {
                 if (data.is_dead) {
+                    setLoseModalWinner(data.winner_color);
                     showLoseModal();
                 } else if (data.has_won) {
                     showWinModal();
+                }
+                // Disable End turn when game is over so user doesn't get "Game has ended" error
+                const endTurnBtn = document.getElementById('endTurnBtn');
+                if (endTurnBtn) {
+                    endTurnBtn.disabled = !!data.game_ended;
+                    endTurnBtn.title = data.game_ended ? 'Game has ended' : 'End Turn';
                 }
             }
         })
         .catch(error => {
             console.error('Error checking win/lose status:', error);
         });
+}
+
+function setLoseModalWinner(winnerColor) {
+    const el = document.getElementById('loseModalWinnerName');
+    if (!el) return;
+    if (winnerColor && typeof winnerColor === 'string') {
+        el.textContent = winnerColor.charAt(0).toUpperCase() + winnerColor.slice(1).toLowerCase();
+    } else {
+        el.textContent = 'Another';
+    }
 }
 
 function showLoseModal() {
@@ -799,30 +823,23 @@ function showWinModal() {
     }
 }
 
-function continueAfterLose() {
-    fetch('/api/game/continue-after-lose', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json'
-        }
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            const modal = document.getElementById('loseModal');
-            if (modal) {
-                modal.style.display = 'none';
-            }
-            // Reload game state to continue with other players
-            loadGameState();
-        } else {
-            alert('Error continuing game: ' + (data.error || 'Unknown error'));
-        }
-    })
-    .catch(error => {
-        console.error('Error continuing after lose:', error);
-        alert('Error continuing game');
-    });
+function exitToMenu() {
+    window.location.href = '/';
+}
+
+function showGameStatsModal() {
+    const loseModal = document.getElementById('loseModal');
+    const winModal = document.getElementById('winModal');
+    const statsModal = document.getElementById('gameStatsModal');
+    if (loseModal) loseModal.style.display = 'none';
+    if (winModal) winModal.style.display = 'none';
+    if (statsModal) statsModal.style.display = 'flex';
+}
+
+function closeGameStatsModalAndExit() {
+    const statsModal = document.getElementById('gameStatsModal');
+    if (statsModal) statsModal.style.display = 'none';
+    exitToMenu();
 }
 
 function continueAfterWin() {

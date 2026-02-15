@@ -13,6 +13,13 @@ from ai.ai_manager import AIManager
 ONE_MOVE_AI_MAP = "one_move_ai.map"
 
 
+def _set_all_ai_difficulties(game_state: GameState, difficulty: Difficulty) -> None:
+    """Set ai_difficulty on all AI entities (for tests)."""
+    for entity in (game_state.entities_manager.entities or []):
+        if entity.is_artificial_intelligence():
+            entity.set_ai_difficulty(difficulty)
+
+
 @visual_test("one move ai easy", "Execute a single AI move (easy) on level 2")
 class OneMoveAIEasyTest(VisualTest):
     """One AI move with EASY difficulty."""
@@ -31,7 +38,8 @@ class OneMoveAIEasyTest(VisualTest):
     def run(self, game_state: GameState) -> GameState:
         _assert_ready_ai_unit_at_32(game_state)
         _print_move_zone_for_unit_at_32(game_state)
-        ai_manager = AIManager(game_state, Difficulty.EASY)
+        _set_all_ai_difficulties(game_state, Difficulty.EASY)
+        ai_manager = AIManager(game_state)
         ai_manager.process_ai_turn()
         return game_state
 
@@ -54,7 +62,8 @@ class OneMoveAIAverageTest(VisualTest):
     def run(self, game_state: GameState) -> GameState:
         _assert_ready_ai_unit_at_32(game_state)
         _print_move_zone_for_unit_at_32(game_state)
-        ai_manager = AIManager(game_state, Difficulty.AVERAGE)
+        _set_all_ai_difficulties(game_state, Difficulty.AVERAGE)
+        ai_manager = AIManager(game_state)
         ai_manager.process_ai_turn()
         return game_state
 
@@ -77,7 +86,8 @@ class OneMoveAIHardTest(VisualTest):
     def run(self, game_state: GameState) -> GameState:
         _assert_ready_ai_unit_at_32(game_state)
         _print_move_zone_for_unit_at_32(game_state)
-        ai_manager = AIManager(game_state, Difficulty.HARD)
+        _set_all_ai_difficulties(game_state, Difficulty.HARD)
+        ai_manager = AIManager(game_state)
         ai_manager.process_ai_turn()
         return game_state
 
@@ -100,7 +110,8 @@ class OneMoveAIExpertTest(VisualTest):
     def run(self, game_state: GameState) -> GameState:
         _assert_ready_ai_unit_at_32(game_state)
         _print_move_zone_for_unit_at_32(game_state)
-        ai_manager = AIManager(game_state, Difficulty.EXPERT)
+        _set_all_ai_difficulties(game_state, Difficulty.EXPERT)
+        ai_manager = AIManager(game_state)
         ai_manager.process_ai_turn()
         return game_state
 
@@ -123,7 +134,8 @@ class OneMoveAIBalancerTest(VisualTest):
     def run(self, game_state: GameState) -> GameState:
         _assert_ready_ai_unit_at_32(game_state)
         _print_move_zone_for_unit_at_32(game_state)
-        ai_manager = AIManager(game_state, Difficulty.BALANCER)
+        _set_all_ai_difficulties(game_state, Difficulty.BALANCER)
+        ai_manager = AIManager(game_state)
         ai_manager.process_ai_turn()
         return game_state
 

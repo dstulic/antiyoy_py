@@ -90,13 +90,28 @@
         <div id="loseModal" class="game-modal-overlay" style="display: none;">
             <div class="game-modal-dialog">
                 <div class="game-modal-header">
-                    <h2>You died!</h2>
+                    <h2>You lost!</h2>
                 </div>
                 <div class="game-modal-body">
-                    <p>The game will continue for other players.</p>
+                    <p id="loseModalWinnerLine"><span id="loseModalWinnerName"></span> player has won the game.</p>
                 </div>
                 <div class="game-modal-footer">
-                    <button class="game-modal-button" onclick="continueAfterLose()">Continue</button>
+                    <button class="game-modal-button" onclick="exitToMenu()">Exit</button>
+                    <button class="game-modal-button" onclick="showGameStatsModal()">Stats</button>
+                </div>
+            </div>
+        </div>
+        
+        <div id="gameStatsModal" class="game-modal-overlay" style="display: none;">
+            <div class="game-modal-dialog">
+                <div class="game-modal-header">
+                    <h2>Game stats</h2>
+                </div>
+                <div class="game-modal-body">
+                    <!-- Stats content placeholder -->
+                </div>
+                <div class="game-modal-footer">
+                    <button class="game-modal-button" onclick="closeGameStatsModalAndExit()">Exit</button>
                 </div>
             </div>
         </div>
@@ -110,7 +125,8 @@
                     <p>Congratulations on your victory!</p>
                 </div>
                 <div class="game-modal-footer">
-                    <button class="game-modal-button" onclick="continueAfterWin()">Continue</button>
+                    <button class="game-modal-button" onclick="exitToMenu()">Exit</button>
+                    <button class="game-modal-button" onclick="showGameStatsModal()">Stats</button>
                 </div>
             </div>
         </div>
