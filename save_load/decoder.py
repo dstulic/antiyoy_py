@@ -16,6 +16,7 @@ from save_load.format import (
     SECTION_CORE_INIT,
     SECTION_RNG_STATE,
     SECTION_EVENTS_LIST,
+    SECTION_ORIGINAL_LEVEL_CODE,
 )
 from core.game_state import GameState
 from core.enums import HColor, PieceType, RulesType, EntityType
@@ -73,9 +74,23 @@ class GameStateDecoder:
         """
         if not level_code or len(level_code) < 3:
             return None, -1
-        
-        # Create new game state (pass level code so TreeManager gets deterministic seed)
-        game_state = GameState(original_level_code=level_code)
+
+        # Determine original level code: saved games have it in a section; levels do not
+        if has_section(level_code, SECTION_ORIGINAL_LEVEL_CODE):
+            import base64
+            source = get_section(level_code, SECTION_ORIGINAL_LEVEL_CODE)
+            if source:
+                try:
+                    original_level_code = base64.b64decode(source).decode("utf-8")
+                except Exception:
+                    original_level_code = level_code
+            else:
+                original_level_code = level_code
+        else:
+            original_level_code = level_code
+
+        # Create new game state (pass original level code so TreeManager gets deterministic seed)
+        game_state = GameState(original_level_code=original_level_code)
         campaign_level_index = -1
         
         try:

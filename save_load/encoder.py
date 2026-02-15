@@ -1,5 +1,6 @@
 """Encoder for save game format."""
 
+import base64
 from typing import Optional
 from save_load.format import (
     start_section,
@@ -24,6 +25,7 @@ from save_load.format import (
     SECTION_CAMPAIGN,
     SECTION_PAUSE_NAME,
     SECTION_RNG_STATE,
+    SECTION_ORIGINAL_LEVEL_CODE,
 )
 from core.game_state import GameState
 
@@ -152,7 +154,6 @@ class GameStateEncoder:
         rng_state = game_state.get_rng_state()
         if rng_state:
             import pickle
-            import base64
             # Pickle the RNG state tuple to bytes
             rng_state_bytes = pickle.dumps(rng_state)
             # Encode to base64 string for safe storage in level code
@@ -163,6 +164,13 @@ class GameStateEncoder:
             # If no RNG state, store placeholder
             builder.append(start_section(SECTION_RNG_STATE))
             builder.append("-")
+
+        # Original level code (so loaded save restores the level we started from)
+        original_b64 = base64.b64encode(
+            game_state._original_level_code.encode("utf-8")
+        ).decode("ascii")
+        builder.append(start_section(SECTION_ORIGINAL_LEVEL_CODE))
+        builder.append(original_b64)
         
         # End with #
         builder.append("#")

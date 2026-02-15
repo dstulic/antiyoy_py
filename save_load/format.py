@@ -26,6 +26,7 @@ SECTION_EDITOR = "editor"
 SECTION_CAMPAIGN = "campaign"
 SECTION_PAUSE_NAME = "pause_name"
 SECTION_RNG_STATE = "rng_state"
+SECTION_ORIGINAL_LEVEL_CODE = "original_level_code"
 
 
 def get_section(level_code: str, section_name: str) -> Optional[str]:

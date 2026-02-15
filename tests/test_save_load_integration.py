@@ -12,6 +12,7 @@ from core.enums import HColor, PieceType, RulesType, EntityType
 from save_load.decoder import _build_adjacency_graph
 from save_load.encoder import GameStateEncoder
 from save_load.decoder import GameStateDecoder
+from save_load.format import SECTION_ORIGINAL_LEVEL_CODE, has_section
 from commands.types import BuildPieceCommand
 from commands.executor import CommandExecutor
 from commands.validator import CommandValidator
@@ -492,6 +493,73 @@ def test_save_and_load_empty_history():
     # Empty history is acceptable - just verify it doesn't crash
 
 
+def test_original_level_code_roundtrip():
+    """Save and load preserves _original_level_code (section is encoded in save)."""
+    game_state = GameState(original_level_code="test_level_with#hash")
+    game_state.set_ruleset(RulesType.DEF, version_code=1)
+    hex1 = game_state.add_hex(0, 0, HColor.RED)
+    hex1.piece = PieceType.CITY
+    _build_adjacency_graph(game_state)
+    from core.player_entity import PlayerEntity
+    red_player = PlayerEntity(game_state.entities_manager, EntityType.HUMAN, HColor.RED)
+    if game_state.entities_manager.entities is None:
+        game_state.entities_manager.entities = []
+    game_state.entities_manager.entities.append(red_player)
+    game_state.provinces_manager.builder.grant_permission()
+    game_state.provinces_manager.builder.apply()
+    for p in game_state.provinces_manager.provinces:
+        p.set_money(100)
+
+    encoder = GameStateEncoder()
+    saved = encoder.encode(game_state)
+    assert has_section(saved, SECTION_ORIGINAL_LEVEL_CODE), "Saved game should include original_level_code section"
+
+    decoder = GameStateDecoder()
+    loaded, _ = decoder.decode(saved)
+    assert loaded._original_level_code == "test_level_with#hash", (
+        "Loaded state should restore original level code (with # preserved)"
+    )
+
+
+def test_loading_level_without_original_section_uses_level_as_original():
+    """When loading a level (no original_level_code section), _original_level_code is the level code."""
+    try:
+        from campaign.levels import get_level_code
+    except ImportError:
+        return
+    level_code = get_level_code(0)
+    if not level_code or level_code == "-":
+        return
+    decoder = GameStateDecoder()
+    game_state, _ = decoder.decode(level_code)
+    assert game_state._original_level_code == level_code, (
+        "Decoding a level (no section) should set _original_level_code to the level code"
+    )
+
+
+def test_loading_saved_game_restores_original_level_code():
+    """When loading a saved game (with original_level_code section), _original_level_code is restored from section."""
+    try:
+        from campaign.levels import get_level_code
+    except ImportError:
+        return
+    level_code = get_level_code(0)
+    if not level_code or level_code == "-":
+        return
+    decoder = GameStateDecoder()
+    encoder = GameStateEncoder()
+    game_state, _ = decoder.decode(level_code)
+    original_stored = game_state._original_level_code
+    saved = encoder.encode(game_state, campaign_level_index=0)
+    loaded, _ = decoder.decode(saved)
+    assert loaded._original_level_code == original_stored, (
+        "Loading a save should restore the original level code from the save file"
+    )
+    assert loaded._original_level_code == level_code, (
+        "Restored original level code should equal the level we started from"
+    )
+
+
 if __name__ == "__main__":
     test_save_and_load_game_state()
     print("✓ test_save_and_load_game_state passed")
@@ -519,5 +587,14 @@ if __name__ == "__main__":
     
     test_save_and_load_empty_history()
     print("✓ test_save_and_load_empty_history passed")
+
+    test_original_level_code_roundtrip()
+    print("✓ test_original_level_code_roundtrip passed")
+
+    test_loading_level_without_original_section_uses_level_as_original()
+    print("✓ test_loading_level_without_original_section_uses_level_as_original passed")
+
+    test_loading_saved_game_restores_original_level_code()
+    print("✓ test_loading_saved_game_restores_original_level_code passed")
     
     print("\nAll tests passed!")
