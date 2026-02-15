@@ -74,14 +74,11 @@ class GameStateDecoder:
         if not level_code or len(level_code) < 3:
             return None, -1
         
-        # Create new game state
-        game_state = GameState()
+        # Create new game state (pass level code so TreeManager gets deterministic seed)
+        game_state = GameState(original_level_code=level_code)
         campaign_level_index = -1
         
         try:
-            # Store original level code for deterministic seed generation
-            game_state._original_level_code = level_code
-            
             # Decode campaign level index first
             campaign_level_index = self._decode_campaign_level_index(level_code)
             
@@ -100,17 +97,9 @@ class GameStateDecoder:
             self._decode_rng_state(game_state, level_code)
             self._decode_events_list(game_state, level_code)
             
-            # Reinitialize TreeManager RNG with correct seed or restore saved state
-            if hasattr(game_state, 'tree_manager') and game_state.tree_manager:
-                if game_state._rng_state:
-                    # Restore saved RNG state
-                    game_state.tree_manager.random.setstate(game_state._rng_state)
-                else:
-                    # Reinitialize with deterministic seed from original level code
-                    from core.rng_utils import get_deterministic_seed
-                    import random
-                    seed = get_deterministic_seed(game_state._original_level_code)
-                    game_state.tree_manager.random = random.Random(seed)
+            # Restore saved RNG state if present; otherwise TreeManager already has correct seed from level code
+            if hasattr(game_state, 'tree_manager') and game_state.tree_manager and game_state._rng_state:
+                game_state.tree_manager.random.setstate(game_state._rng_state)
             
             return game_state, campaign_level_index
         except Exception as e:

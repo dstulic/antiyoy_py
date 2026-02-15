@@ -141,6 +141,7 @@ class MockGameState:
         # Create events manager
         self.events_manager = EventsManager(self)
         self.events_manager.factory = EventsFactory(self.events_manager)
+        self._original_level_code = "asdf"  # Required for TreeManager RNG
         # Create game end manager (real one, but it won't mark games as ended for single-player scenarios)
         from core.game_end_manager import GameEndManager
         self.game_end_manager = GameEndManager(self)

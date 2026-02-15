@@ -13,14 +13,14 @@ from core.ruleset import RulesetFactory, AbstractRuleset
 class GameState(IEventListener):
     """Main game state class integrating all game components."""
 
-    def __init__(self, name: str = ""):
-        """Initialize game state."""
+    def __init__(self, name: str = "", original_level_code: str = ""):
+        """Initialize game state. original_level_code is used for deterministic RNG (e.g. pass level code from decoder)."""
         self.name = name
         self.hexes: List[Hex] = []
         self.current_unit_id = 0
-        
-        # Store original level code for deterministic seed generation
-        self._original_level_code: Optional[str] = None
+
+        # Original level code for deterministic seed (always set; decoder passes level code)
+        self._original_level_code: str = original_level_code
         
         # Store RNG state for save/load
         self._rng_state: Optional[tuple] = None

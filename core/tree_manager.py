@@ -30,11 +30,8 @@ class TreeManager(IEventListener):
         self.game_state = game_state
         self.temp_hex_list: list["Hex"] = []  # For tree breeding
         
-        # Initialize RNG with deterministic seed from original level code
-        seed = 0  # Default fallback
-        if game_state and hasattr(game_state, '_original_level_code') and game_state._original_level_code:
-            seed = get_deterministic_seed(game_state._original_level_code)
-        
+        # Initialize RNG from game state's original level code (always set on GameState)
+        seed = get_deterministic_seed(game_state._original_level_code)
         self.random = random.Random(seed)
         
         # If RNG state is already set (from save/load), restore it
