@@ -904,6 +904,8 @@ class ProvincesManager(IEventListener):
                         # Then handle enlargement (add hex to adjacent province of new color)
                         if event.hex.color != HColor.GRAY:
                             self._enlarge_province_for_hex(event.hex)
+                    # After any unit build, ensure all provinces have cities
+                    self._fix_provinces_without_cities()
 
     def _enlarge_province_for_hex(self, hex: Hex) -> None:
         """
@@ -940,14 +942,15 @@ class ProvincesManager(IEventListener):
         # Determine target province and add the modified hex
         target_province = None
         if len(adjacent_provinces) == 0:
-            # No adjacent province found - create new province for this hex
-            # Also add previously lonely hexes to the new province
+            # No adjacent province - form new province from this hex + orphan hexes (min 2 hexes)
             if hex.color != HColor.GRAY:
                 target_province = self.add_province()
                 target_province.add_hex(hex)
-                # Add previously lonely hexes (matching original game's makeTargetProvinceFromScratch)
                 for lonely_hex in previously_lonely_hexes:
                     target_province.add_hex(lonely_hex)
+                if len(target_province.get_hexes()) < 2:
+                    self.remove_province(target_province)
+                    target_province = None
         elif len(adjacent_provinces) == 1:
             # Single adjacent province - add hex to it
             target_province = adjacent_provinces[0]
@@ -992,16 +995,19 @@ class ProvincesManager(IEventListener):
 
     def _fix_provinces_without_cities(self) -> None:
         """
-        Ensure all provinces have at least one city.
-        
-        This matches the original game's CityManager.doFixProvincesWithoutCities() method.
-        Called after hex color changes to ensure provinces that lost their city get a new one.
+        Ensure all provinces have at least one city. Single-hex provinces without a city
+        are removed (orphans need at least 2 hexes to form a province and get a city).
         """
-        for province in self.provinces:
-            # Check if province has a city
-            has_city = any(hex.piece == PieceType.CITY for hex in province.get_hexes())
+        for province in list(self.provinces):
+            hexes = province.get_hexes()
+            if len(hexes) < 2:
+                # Single-hex province without a city is invalid; remove it
+                has_city = any(hex.piece == PieceType.CITY for hex in hexes)
+                if not has_city:
+                    self.remove_province(province)
+                continue
+            has_city = any(hex.piece == PieceType.CITY for hex in hexes)
             if not has_city:
-                # Province doesn't have a city - add one
                 self.reduction_worker._add_city_to_province(province)
 
     def _remove_excessive_cities(self, province: Province, city_to_province_map: Optional[Dict[Hex, Province]] = None) -> None:

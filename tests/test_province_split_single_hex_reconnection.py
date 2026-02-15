@@ -1,4 +1,14 @@
-"""Integration test for province split resulting in single hex that should reconnect."""
+"""Integration test for province split resulting in single hex that should reconnect.
+
+Why the original tests didn't catch the single-hex city regression:
+- They only assert state after split (orphan has no province) and after expansion.
+- They never call _fix_provinces_without_cities when a 1-hex province without a city
+  exists. The bug was that _fix_provinces_without_cities added a city to every
+  province without a city, including invalid 1-hex provinces (so the city "popped up"
+  when that code ran later, e.g. on AI turn). The regression test below explicitly
+  creates that invalid state and asserts _fix_provinces_without_cities removes the
+  province instead of adding a city.
+"""
 
 import sys
 import os
@@ -95,13 +105,11 @@ def test_single_hex_after_split_reconnects_when_province_expands():
     
     assert hex0.get_province() is not None, "Hex0 should still be in a province"
     assert hex1.color == HColor.GRAY, "Hex1 should be gray"
-    assert hex2.get_province() is None, "Hex2 should NOT be in a province (single hex removed)"
+    assert hex2.get_province() is None, "Hex2 should have no province (single-hex cluster not created)"
     assert hex2.color == HColor.RED, "Hex2 should still be red"
-    
-    # Now expand the province by changing hex1 back to red (via unit move or color change)
-    # This simulates the province expanding to be adjacent to hex2
-    # First, let's add a unit to hex0's province
-    hex0.piece = PieceType.PEASANT  # Replace city with unit for movement
+
+    # Expand: put a unit on hex0 and move to hex1 to capture it; new province will form from hex1 + hex0 + hex2
+    hex0.piece = PieceType.PEASANT
     
     # Mark unit as ready
     if hex0 not in game_state.readiness_manager.ready_hexes:
@@ -175,7 +183,64 @@ def test_single_hex_after_split_reconnects_via_color_change():
         f"hex2.is_adjacent_to_hexes_of_same_color()={hex2.is_adjacent_to_hexes_of_same_color()}"
 
 
+def test_fix_provinces_without_cities_removes_single_hex_province_instead_of_adding_city():
+    """
+    Regression: _fix_provinces_without_cities must NOT add a city to a province
+    with only one hex; it must REMOVE that province (bug: city 'pops up' on AI turn).
+
+    This test MUST FAIL with buggy province.py and PASS with the fix.
+    """
+    game_state = GameState()
+    game_state.set_ruleset(RulesType.DEF, version_code=1)
+    hex0 = game_state.add_hex(0, 0, HColor.RED)
+    hex1 = game_state.add_hex(1, 0, HColor.RED)
+    hex0.piece = PieceType.PEASANT
+    hex1.piece = PieceType.PEASANT
+    _build_adjacency_graph(game_state)
+    from core.player_entity import PlayerEntity
+    player = PlayerEntity(game_state.entities_manager, EntityType.HUMAN, HColor.RED)
+    if game_state.entities_manager.entities is None:
+        game_state.entities_manager.entities = []
+    game_state.entities_manager.entities.append(player)
+    game_state.provinces_manager.builder.grant_permission()
+    game_state.provinces_manager.builder.apply()
+
+    red_provinces = [p for p in game_state.provinces_manager.provinces if p.get_color() == HColor.RED]
+    assert len(red_provinces) == 1, "expected one red province"
+    province = red_provinces[0]
+    hexes_in_province = list(province.get_hexes())
+    assert len(hexes_in_province) >= 2, "need at least 2 hexes to then reduce to 1"
+    for h in hexes_in_province:
+        if h is not hex0:
+            province.remove_hex(h)
+    assert len(province.get_hexes()) == 1, "setup: province must have exactly 1 hex"
+    assert hex0.piece != PieceType.CITY, "setup: hex0 must not have a city yet"
+
+    # Call the exact method that has the bug (adds city to 1-hex province instead of removing it).
+    game_state.provinces_manager._fix_provinces_without_cities()
+
+    # With BUGGY code: province stays in manager AND hex0 gets a city -> test must fail.
+    # With FIXED code: province is removed, hex0 has no city -> test must pass.
+    province_still_in_manager = province in game_state.provinces_manager.provinces
+    hex_has_city = hex0.piece == PieceType.CITY
+    if province_still_in_manager and hex_has_city:
+        raise AssertionError(
+            "Regression: _fix_provinces_without_cities must REMOVE a 1-hex province without a city, "
+            "not add a city to it. Current state: province_still_in_manager=True, hex_has_city=True. "
+            "Apply the fix in province.py: in _fix_provinces_without_cities, remove single-hex provinces that have no city (do not add a city to them)."
+        )
+    assert province not in game_state.provinces_manager.provinces, (
+        "Single-hex province without city must be removed from manager"
+    )
+    assert hex0.piece != PieceType.CITY, (
+        "Single hex must not get a city"
+    )
+
+
 if __name__ == "__main__":
+    # Run regression test first. With buggy province.py this MUST fail.
+    test_fix_provinces_without_cities_removes_single_hex_province_instead_of_adding_city()
+    print("✓ test_fix_provinces_without_cities_removes_single_hex_province_instead_of_adding_city passed")
     test_single_hex_after_split_reconnects_when_province_expands()
     print("\n" + "="*50)
     test_single_hex_after_split_reconnects_via_color_change()
