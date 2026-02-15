@@ -114,14 +114,16 @@ class AIManager:
         """
         if not self.active:
             return
-        
-        max_iterations = 100  # Prevent infinite loops
-        iterations = 0
-        game_end_manager = getattr(self.game_state, 'game_end_manager', None)
 
+        n_entities = len(self.game_state.entities_manager.entities)
+        hex_count = len(self.game_state.hexes)
+        max_ai_laps = hex_count * 10
+        max_iterations = max_ai_laps * n_entities
+        iterations = 0
+        
         while iterations < max_iterations:
             # Stop as soon as the game is over (someone won: 80% or all opponents dead)
-            if game_end_manager and game_end_manager.is_game_ended():
+            if self.game_state.game_end_manager.is_game_ended():
                 break
 
             current_entity = self.game_state.entities_manager.get_current_entity()
@@ -138,12 +140,14 @@ class AIManager:
                 if not processed:
                     break
                 # After AI turn, game may have ended (e.g. reached 80%); stop immediately
-                if game_end_manager and game_end_manager.is_game_ended():
+                if self.game_state.game_end_manager.is_game_ended():
                     break
             else:
                 break
 
             iterations += 1
+        if iterations >= max_iterations:
+            print(f"Warning: AI max turns limit reached ({max_iterations}).")
 
     def set_active(self, active: bool) -> None:
         """Set whether AI manager is active."""
