@@ -165,6 +165,7 @@ class UndoManager(IEventListener):
                 restored_entity.color
             )
             new_entity.set_name(restored_entity.name)
+            new_entity.set_ai_difficulty(restored_entity.ai_difficulty)
             # Copy relations if any (for now, skip as relations are complex)
             self.game_state.entities_manager.entities.append(new_entity)
         

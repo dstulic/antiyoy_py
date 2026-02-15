@@ -482,8 +482,8 @@ class GameStateDecoder:
                     hex1 = game_state.get_hex(c1, c2)
                     hex2 = game_state.get_hex(c3, c4)
                     if hex1 and hex2:
-                        event.set_hex1(hex1)
-                        event.set_hex2(hex2)
+                        event.set_start(hex1)
+                        event.set_finish(hex2)
                 except (ValueError, KeyError):
                     pass
         elif event_type == EventType.PIECE_ADD:
