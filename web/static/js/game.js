@@ -740,7 +740,16 @@ function closeBuildMenu() {
 // Action button functions
 function undoAction() {
     console.log('Undo action');
-    
+    // Cancel placement mode and movement mode first if active
+    if (gameBoard) {
+        if (gameBoard.placementMode) {
+            gameBoard.cancelPlacementMode();
+            closeBuildMenu();
+        }
+        if (gameBoard.movementMode) {
+            gameBoard.cancelMovementMode();
+        }
+    }
     fetch('/api/game/undo', {
         method: 'POST',
         headers: {
