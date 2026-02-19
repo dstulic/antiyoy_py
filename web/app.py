@@ -277,10 +277,11 @@ def _do_game_init(level_index, difficulties=None):
         # Initialize starting money for all provinces (default is 10 if not set)
         # This matches the Java version's prepareStartingMoney() behavior
         from core.enums import EventType, PieceType
+        from core.events import SYSTEM_AUTHOR
         for province in game_state.provinces_manager.provinces:
             # Only set money if it's 0 (not already set from level code)
             if province.get_money() == 0:
-                event = game_state.events_manager.factory.create_event(EventType.SET_MONEY)
+                event = game_state.events_manager.factory.create_event(EventType.SET_MONEY, author=SYSTEM_AUTHOR)
                 if event:
                     event.province_id = province.get_id()
                     event.money = 10
@@ -2482,8 +2483,8 @@ def api_unit_tests_build():
             for city_hex in city_hexes:
                 if city_hex != hex_obj:  # Don't remove the hex we're building on
                     # Delete the existing city
-                    delete_event = game_state.events_manager.factory.create_event(EventType.PIECE_DELETE)
-                    from core.events import EventPieceDelete
+                    from core.events import EventPieceDelete, SYSTEM_AUTHOR
+                    delete_event = game_state.events_manager.factory.create_event(EventType.PIECE_DELETE, author=SYSTEM_AUTHOR)
                     if isinstance(delete_event, EventPieceDelete):
                         delete_event.set_hex(city_hex)
                         try:
@@ -2576,8 +2577,8 @@ def api_unit_tests_build_land():
             
             # Remove piece if any
             if hex_obj.piece:
-                delete_event = game_state.events_manager.factory.create_event(EventType.PIECE_DELETE)
-                from core.events import EventPieceDelete
+                from core.events import EventPieceDelete, SYSTEM_AUTHOR
+                delete_event = game_state.events_manager.factory.create_event(EventType.PIECE_DELETE, author=SYSTEM_AUTHOR)
                 if isinstance(delete_event, EventPieceDelete):
                     delete_event.set_hex(hex_obj)
                     game_state.events_manager.apply_event(delete_event)
@@ -2604,8 +2605,8 @@ def api_unit_tests_build_land():
             else:
                 # Change existing hex to gray
                 previous_color = hex_obj.color
-                change_color_event = game_state.events_manager.factory.create_event(EventType.HEX_CHANGE_COLOR)
-                from core.events import EventHexChangeColor
+                from core.events import EventHexChangeColor, SYSTEM_AUTHOR
+                change_color_event = game_state.events_manager.factory.create_event(EventType.HEX_CHANGE_COLOR, author=SYSTEM_AUTHOR)
                 if isinstance(change_color_event, EventHexChangeColor):
                     change_color_event.set_hex(hex_obj)
                     change_color_event.set_color(HColor.GRAY)
@@ -2646,8 +2647,8 @@ def api_unit_tests_build_land():
                 if not has_target_color_neighbor:
                     return jsonify({'success': False, 'error': 'Hex must be adjacent to a hex of the target color'}), 400
                 
-                change_color_event = game_state.events_manager.factory.create_event(EventType.HEX_CHANGE_COLOR)
-                from core.events import EventHexChangeColor
+                from core.events import EventHexChangeColor, SYSTEM_AUTHOR
+                change_color_event = game_state.events_manager.factory.create_event(EventType.HEX_CHANGE_COLOR, author=SYSTEM_AUTHOR)
                 if isinstance(change_color_event, EventHexChangeColor):
                     change_color_event.set_hex(hex_obj)
                     change_color_event.set_color(target_color)
@@ -2708,11 +2709,11 @@ def api_unit_tests_set_hex_piece():
             return jsonify({'success': False, 'error': 'Hex not found'}), 404
 
         from core.enums import EventType, PieceType
-        from core.events import EventPieceDelete
+        from core.events import EventPieceDelete, SYSTEM_AUTHOR
 
         if piece_str == 'clear':
             if hex_obj.piece:
-                delete_event = game_state.events_manager.factory.create_event(EventType.PIECE_DELETE)
+                delete_event = game_state.events_manager.factory.create_event(EventType.PIECE_DELETE, author=SYSTEM_AUTHOR)
                 if isinstance(delete_event, EventPieceDelete):
                     delete_event.set_hex(hex_obj)
                     game_state.events_manager.apply_event(delete_event)

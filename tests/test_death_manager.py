@@ -10,7 +10,7 @@ from core.death_manager import DeathManager
 from core.province import Province
 from core.hex import Hex
 from core.enums import HColor, PieceType, EventType, EntityType
-from core.events import EventTurnEnd, EventsManager, EventsFactory, EventPieceBuild
+from core.events import EventTurnEnd, EventsManager, EventsFactory, EventPieceBuild, SYSTEM_AUTHOR
 from typing import Optional
 
 
@@ -209,7 +209,7 @@ class TestDeathManager:
         # Apply turn end event (switches from RED to BLUE)
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # Verify money was reset to 0 (BLUE is now current, so BLUE's province is checked)
         assert province.get_money() == 0
@@ -250,7 +250,7 @@ class TestDeathManager:
         # Apply turn end event
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # Verify money was not changed
         assert province.get_money() == 100
@@ -295,7 +295,7 @@ class TestDeathManager:
         # Apply turn end event (switches from RED to BLUE)
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # After turn switch, BLUE is current, so BLUE's provinces should be checked
         # Verify blue province was reset and units killed (BLUE is now current)
@@ -331,7 +331,7 @@ class TestDeathManager:
         # Apply turn end event
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # Verify lonely unit was killed
         assert hex1.piece == PieceType.GRAVE
@@ -363,7 +363,7 @@ class TestDeathManager:
         # Apply turn end event
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # Verify unit was NOT killed (it's in a province)
         assert hex1.piece == PieceType.PEASANT
@@ -392,7 +392,7 @@ class TestDeathManager:
         # Apply turn end event
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # Verify neutral hex unit was NOT killed
         assert hex1.piece == PieceType.PEASANT
@@ -420,7 +420,7 @@ class TestDeathManager:
         # Apply turn end event
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # Verify empty hex was not affected
         assert hex1.piece is None
@@ -449,7 +449,7 @@ class TestDeathManager:
         # Apply turn end event
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # Verify tower was NOT killed (only units are killed)
         assert hex1.piece == PieceType.TOWER
@@ -483,7 +483,7 @@ class TestDeathManager:
         # Apply turn end event
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # Verify money was not changed
         assert province.get_money() == 0

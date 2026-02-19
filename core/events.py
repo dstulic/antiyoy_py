@@ -109,6 +109,17 @@ class AbstractEvent(ABC):
         return f"[{self.__class__.__name__}]"
 
 
+class SystemAuthor:
+    """Sentinel author for events triggered by game logic (death, trees, init, etc.), not a player."""
+
+    color = None
+    name = "system"
+
+
+# Singleton for use as event author when no player is responsible.
+SYSTEM_AUTHOR = SystemAuthor()
+
+
 class EventKeys:
     """Utility class for converting between EventType and string keys."""
 
@@ -1020,8 +1031,8 @@ class EventsFactory:
         """Initialize factory."""
         self.events_manager = events_manager
 
-    def create_event(self, event_type: EventType) -> Optional[AbstractEvent]:
-        """Create an event of the specified type."""
+    def create_event(self, event_type: EventType, author=SYSTEM_AUTHOR) -> Optional[AbstractEvent]:
+        """Create an event of the specified type. author is required (default SYSTEM_AUTHOR)."""
         event_map = {
             EventType.PIECE_ADD: EventPieceAdd,
             EventType.UNIT_MOVE: EventUnitMove,
@@ -1047,6 +1058,7 @@ class EventsFactory:
         if event_class:
             event = event_class()
             event.set_core_model(self.events_manager.core_model)
+            event.set_author(author)
             return event
         return None
 
@@ -1073,10 +1085,16 @@ class EventsManager:
         if listener in self.event_listeners:
             self.event_listeners.remove(listener)
 
-    def apply_event(self, event: AbstractEvent) -> None:
-        """Apply an event."""
+    def apply_event(self, event: AbstractEvent, author=None) -> None:
+        """Apply an event. If author is passed, set it on the event. If event.author is still None, set SYSTEM_AUTHOR."""
         if not event.is_valid():
             return
+        if author is not None:
+            event.set_author(author)
+        if author is None and event.author is None:
+            assert False, "Event author is not set and no author was passed"
+        # if event.author is None:
+        #     event.set_author(SYSTEM_AUTHOR)
         # Notify listeners of validation
         for listener in self.event_listeners:
             listener.on_event_validated(event)

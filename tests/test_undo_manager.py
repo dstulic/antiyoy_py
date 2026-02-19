@@ -472,10 +472,10 @@ class TestUndoManager:
         assert game_state.undo_manager.can_undo()
         
         # End turn
-        from core.events import EventTurnEnd
+        from core.events import EventTurnEnd, SYSTEM_AUTHOR
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # Verify undo list is cleared
         assert not game_state.undo_manager.can_undo()

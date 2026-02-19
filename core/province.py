@@ -3,7 +3,7 @@
 from typing import Optional, List, Callable, Dict
 from core.hex import Hex
 from core.enums import HColor, PieceType
-from core.events import IEventListener, AbstractEvent, EventPieceAdd, EventPieceDelete
+from core.events import IEventListener, AbstractEvent, EventPieceAdd, EventPieceDelete, SYSTEM_AUTHOR
 from core.enums import EventType
 
 
@@ -504,14 +504,14 @@ class ProvincesReductionWorker:
         
         # Delete existing piece if any (matching original game)
         if hex_for_city.has_piece():
-            delete_event = self.provinces_manager.core_model.events_manager.factory.create_event(EventType.PIECE_DELETE)
+            delete_event = self.provinces_manager.core_model.events_manager.factory.create_event(EventType.PIECE_DELETE, author=SYSTEM_AUTHOR)
             from core.events import EventPieceDelete
             if isinstance(delete_event, EventPieceDelete):
                 delete_event.set_hex(hex_for_city)
                 self.provinces_manager.core_model.events_manager.apply_event(delete_event)
         
         # Add city
-        add_event = self.provinces_manager.core_model.events_manager.factory.create_event(EventType.PIECE_ADD)
+        add_event = self.provinces_manager.core_model.events_manager.factory.create_event(EventType.PIECE_ADD, author=SYSTEM_AUTHOR)
         if isinstance(add_event, EventPieceAdd):
             add_event.set_hex(hex_for_city)
             add_event.set_piece_type(PieceType.CITY)
@@ -1046,7 +1046,7 @@ class ProvincesManager(IEventListener):
         for city_hex in city_hexes:
             if city_hex is city_to_keep:
                 continue
-            delete_event = self.core_model.events_manager.factory.create_event(EventType.PIECE_DELETE)
+            delete_event = self.core_model.events_manager.factory.create_event(EventType.PIECE_DELETE, author=SYSTEM_AUTHOR)
             from core.events import EventPieceDelete
             if isinstance(delete_event, EventPieceDelete):
                 delete_event.set_hex(city_hex)

@@ -24,9 +24,8 @@ class HistoryEvent:
     def encode(self) -> str:
         """
         Encode history event to string format.
-        
-        Format: <event_encoding>|author:<color>:<name>
-        If no author, format: <event_encoding>|author:-
+
+        Format: <event_encoding>|author:<color>:<name> or |author:system or |author:-
         """
         event_encoding = self.event.encode()
         if self.author_color:
@@ -34,6 +33,8 @@ class HistoryEvent:
             if self.author_name:
                 author_str += f":{self.author_name}"
             return f"{event_encoding}|author:{author_str}"
+        if self.author_name:
+            return f"{event_encoding}|author:{self.author_name}"
         return f"{event_encoding}|author:-"
     
     def __str__(self) -> str:
@@ -43,6 +44,8 @@ class HistoryEvent:
             author_info = self.author_color.value
             if self.author_name:
                 author_info += f" ({self.author_name})"
+        elif self.author_name:
+            author_info = self.author_name
         return f"{self.event.get_type().value} by {author_info}"
 
 
@@ -78,13 +81,10 @@ class HistoryManager(IEventListener):
         if not event.is_notable():
             return
         
-        # Get author information
-        author_color = None
-        author_name = None
-        if event.author:
-            author_color = event.author.color
-            author_name = event.author.name
-        
+        # Get author information (player entity has .color/.name; SystemAuthor has .name only)
+        author_color = getattr(event.author, "color", None) if event.author is not None else None
+        author_name = getattr(event.author, "name", None) if event.author is not None else None
+
         # Create history event
         history_event = HistoryEvent(event, author_color, author_name)
         self.current_turn_events.append(history_event)

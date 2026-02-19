@@ -3,7 +3,7 @@ Death Manager - handles unit death when provinces go bankrupt or units become is
 """
 
 from typing import TYPE_CHECKING
-from core.events import IEventListener, AbstractEvent, EventType, EventPieceDelete, EventPieceAdd
+from core.events import IEventListener, AbstractEvent, EventType, EventPieceDelete, EventPieceAdd, SYSTEM_AUTHOR
 from core.enums import PieceType
 from core.core_utils import is_unit
 
@@ -163,13 +163,13 @@ class DeathManager(IEventListener):
         This matches the original game's spawnGrave() method.
         """
         # Delete the piece
-        delete_event = self.game_state.events_manager.factory.create_event(EventType.PIECE_DELETE)
+        delete_event = self.game_state.events_manager.factory.create_event(EventType.PIECE_DELETE, author=SYSTEM_AUTHOR)
         if isinstance(delete_event, EventPieceDelete):
             delete_event.set_hex(hex)
             self.game_state.events_manager.apply_event(delete_event)
         
         # Add grave
-        add_event = self.game_state.events_manager.factory.create_event(EventType.PIECE_ADD)
+        add_event = self.game_state.events_manager.factory.create_event(EventType.PIECE_ADD, author=SYSTEM_AUTHOR)
         if isinstance(add_event, EventPieceAdd):
             add_event.set_hex(hex)
             add_event.set_piece_type(PieceType.GRAVE)

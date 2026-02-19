@@ -98,10 +98,11 @@ def _init_game(level_index: int) -> tuple[GameState, GameManager] | None:
         print("Error: Failed to decode game state.", file=sys.stderr)
         return None
 
+    from core.events import SYSTEM_AUTHOR
     # Starting money for provinces that have 0
     for province in game_state.provinces_manager.provinces:
         if province.get_money() == 0:
-            event = game_state.events_manager.factory.create_event(EventType.SET_MONEY)
+            event = game_state.events_manager.factory.create_event(EventType.SET_MONEY, author=SYSTEM_AUTHOR)
             if event:
                 event.province_id = province.get_id()
                 event.money = 10

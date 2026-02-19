@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.game_state import GameState
 from core.enums import HColor, PieceType, RulesType, EntityType, EventType
-from core.events import EventTurnEnd, EventPieceBuild
+from core.events import EventTurnEnd, EventPieceBuild, SYSTEM_AUTHOR
 from core.core_utils import is_unit
 from save_load.decoder import _build_adjacency_graph
 from commands.types import BuildPieceCommand
@@ -123,7 +123,7 @@ def test_death_manager_integration():
     # Actually, with one entity, turn_index will go back to 0 and lap will increment
     turn_end_event = EventTurnEnd()
     turn_end_event.set_core_model(game_state)
-    game_state.events_manager.apply_event(turn_end_event)
+    game_state.events_manager.apply_event(turn_end_event, author=SYSTEM_AUTHOR)
     
     # After turn end:
     # 1. Turn switches (but with one entity, it cycles back)

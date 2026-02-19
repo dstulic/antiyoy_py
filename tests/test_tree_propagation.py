@@ -10,7 +10,7 @@ from core.tree_manager import TreeManager
 from core.province import Province
 from core.hex import Hex
 from core.enums import HColor, PieceType, EventType, EntityType
-from core.events import EventTurnEnd, EventsManager, EventsFactory
+from core.events import EventTurnEnd, EventsManager, EventsFactory, SYSTEM_AUTHOR
 from typing import Optional
 
 
@@ -181,7 +181,7 @@ class TestTreePropagation:
         # Apply turn end event
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # Tree breeding should have run (may or may not spawn due to 33% probability)
         # But flags should have been set
@@ -218,7 +218,7 @@ class TestTreePropagation:
         # Apply turn end event (switches from turn_index 0 to 1)
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # After turn switch, we're on turn_index=1, so tree breeding should NOT have run
         # Tree count should be the same
@@ -253,7 +253,7 @@ class TestTreePropagation:
         # Apply turn end event
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # At least one of the empty hexes should be flagged (propagation happened)
         # Note: actual spawning is random (33% chance), but flags should be set
@@ -288,7 +288,7 @@ class TestTreePropagation:
         # Apply turn end event
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # Fully surrounded hex should NOT be flagged
         assert not surrounded_hex.flag, "Palm should not propagate to fully surrounded hexes"
@@ -357,7 +357,7 @@ class TestTreePropagation:
         # Apply turn end event
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # Empty hex should NOT be flagged (only 1 adjacent tree)
         assert not empty_hex.flag, "Pine should not propagate to hex with fewer than 2 adjacent trees"
@@ -389,7 +389,7 @@ class TestTreePropagation:
         # Apply turn end event
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # City hex should NOT be flagged (has a piece)
         assert not city_hex.flag, "Trees should not propagate to hexes with pieces"
@@ -421,7 +421,7 @@ class TestTreePropagation:
         # Apply turn end event
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # Flag should have been reset and potentially set again by propagation
         # The important thing is that reset_flags() was called
@@ -469,11 +469,11 @@ class TestTreePropagation:
         # Apply turn end events
         event1 = EventTurnEnd()
         event1.set_core_model(game_state1)
-        game_state1.events_manager.apply_event(event1)
+        game_state1.events_manager.apply_event(event1, author=SYSTEM_AUTHOR)
         
         event2 = EventTurnEnd()
         event2.set_core_model(game_state2)
-        game_state2.events_manager.apply_event(event2)
+        game_state2.events_manager.apply_event(event2, author=SYSTEM_AUTHOR)
         
         # Both should produce same results (deterministic)
         flag1 = game_state1.hexes[1].flag

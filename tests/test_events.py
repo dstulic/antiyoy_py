@@ -394,9 +394,10 @@ class TestEventsManager:
         manager = EventsManager(core_model)
         listener = MockListener()
         manager.add_listener(listener)
+        from core.events import SYSTEM_AUTHOR
         event = EventTurnEnd()
         event.set_core_model(core_model)
-        manager.apply_event(event)
+        manager.apply_event(event, author=SYSTEM_AUTHOR)
         assert listener.validated_count == 1
         assert listener.applied_count == 1
 
