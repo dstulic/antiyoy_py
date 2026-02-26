@@ -1,6 +1,13 @@
 /**
- * Replay page: single file for board rendering and replay logic.
- * Fetches replay data once (initial_state + final_state); all navigation is local.
+ * Replay page: diff-based hex state management.
+ *
+ * Backend sends:
+ *   initial_state  – full hex list + turn/lap/entity_stats at step 0
+ *   step_diffs[]   – per-step: hex_changes (only modified hexes), animation, turn/lap/entity_stats
+ *
+ * The frontend maintains a running hexMap that is patched forward/backward
+ * via hex_changes diffs.  Reverse diffs are computed on-the-fly so backward
+ * navigation is instant.
  */
 
 function isUnitPiece(piece) {
@@ -163,12 +170,12 @@ class ReplayBoard {
         return colors[colorName] || '#808080';
     }
 
-    drawPiece(x, y, pieceType, opacity = 1.0) {
+    drawPiece(x, y, pieceType, opacity = 1.0, scaleFactor = 1.0) {
         const normalizedPieceType = pieceType ? pieceType.toLowerCase() : null;
         if (!normalizedPieceType) return;
         const img = this.pieceImages[normalizedPieceType];
         if (!img || !img.complete || !img.naturalHeight) return;
-        const size = this.hexSize * this.scale * 1.1;
+        const size = this.hexSize * this.scale * 1.1 * (scaleFactor || 1);
         this.ctx.save();
         this.ctx.globalAlpha = opacity;
         this.ctx.drawImage(img, x - size / 2, y - size / 2, size, size);
@@ -267,33 +274,33 @@ class ReplayBoard {
     handleClick() {}
 }
 
-// --- Replay page logic: event-based, single fetch ---
-//
-// We keep three states: beginning state, current state, end state.
-// - beginningState: initial game state (fixed).
-// - endState: final game state (fixed).
-// - currentState: the one we display; equals beginning + events[0..eventIndex-1] applied.
-// - events: list of event encodings from the replay file (e.g. "um 1 2 3 4 1", "pa 0 0 tower -1").
-// - eventIndex: number of events applied to get currentState (0 = at beginning).
-//
-// |< : set current state to beginning state (eventIndex = 0).
-// >| : set current state to end state (eventIndex = events.length).
-// >> : apply events[eventIndex] to current state, then eventIndex++.
-// << : eventIndex--, then set current state = beginning + events[0..eventIndex-1] applied.
+// --- Replay page logic: diff-based, single fetch ---
 
 (function() {
     const params = new URLSearchParams(window.location.search);
     const replayPath = params.get('path');
 
     let board = null;
-    let beginningState = null;
-    let endState = null;
-    /** List of event encodings from replay file (e.g. "um 1 2 3 4 1"). */
-    let events = [];
-    /** Mutable current state (what we display). */
-    let currentState = null;
-    /** Number of events applied to get currentState. 0 = at beginning. */
-    let eventIndex = 0;
+
+    /** Full initial state from backend. */
+    let initialState = null;
+    /** Array of { hex_changes, animation, turn_index, lap, entity_stats }. */
+    let stepDiffs = [];
+    /**
+     * Running hex state: Map<"c1,c2", hexObj>.
+     * Patched forward/backward as the user navigates.
+     */
+    let hexMap = new Map();
+    /**
+     * Reverse patches for undo: reversePatches[i] = array of old hex objects
+     * that were overwritten when step_diffs[i] was applied.
+     */
+    let reversePatches = {};
+    /**
+     * Current position.  0 = initial state; N = state after step_diffs[0..N-1].
+     * Range: [0, stepDiffs.length].
+     */
+    let currentStep = 0;
 
     const loadingEl = document.getElementById('replayLoading');
     const turnCounterEl = document.getElementById('replayTurnCounter');
@@ -301,22 +308,67 @@ class ReplayBoard {
     const statusOverlay = document.getElementById('replayStatusOverlay');
     const statusToggle = document.getElementById('replayStatusToggle');
 
-    function hideLoading() {
-        if (loadingEl) loadingEl.style.display = 'none';
-    }
-
+    function hideLoading() { if (loadingEl) loadingEl.style.display = 'none'; }
     function showLoading(msg) {
-        if (loadingEl) {
-            loadingEl.textContent = msg || 'Loading...';
-            loadingEl.style.display = 'flex';
-        }
+        if (loadingEl) { loadingEl.textContent = msg || 'Loading...'; loadingEl.style.display = 'flex'; }
     }
 
-    function updateTurnCounter(state) {
-        const turn = state && (state.turn_index != null) ? state.turn_index : 0;
-        const lap = state && (state.lap != null) ? state.lap : 0;
-        turnCounterEl.textContent = lap > 0 ? `Turn: ${turn} (Lap ${lap})` : `Turn: ${turn}`;
+    // --- hex map helpers ---
+
+    function hexKey(c1, c2) { return c1 + ',' + c2; }
+
+    function buildHexMap(hexes) {
+        const m = new Map();
+        for (const h of hexes) m.set(hexKey(h.coordinate1, h.coordinate2), h);
+        return m;
     }
+
+    /** Apply step_diffs[stepIdx] forward. Stores reverse patch for undo. */
+    function applyForward(stepIdx) {
+        const diff = stepDiffs[stepIdx];
+        if (!diff) return;
+        const reverse = [];
+        for (const ch of diff.hex_changes) {
+            const k = hexKey(ch.coordinate1, ch.coordinate2);
+            const old = hexMap.get(k);
+            reverse.push(old ? Object.assign({}, old) : null);
+            hexMap.set(k, ch);
+        }
+        reversePatches[stepIdx] = reverse;
+    }
+
+    /** Undo step_diffs[stepIdx] using the stored reverse patch. */
+    function applyBackward(stepIdx) {
+        const diff = stepDiffs[stepIdx];
+        const reverse = reversePatches[stepIdx];
+        if (!diff || !reverse) return;
+        for (let i = 0; i < diff.hex_changes.length; i++) {
+            const ch = diff.hex_changes[i];
+            const k = hexKey(ch.coordinate1, ch.coordinate2);
+            if (reverse[i]) hexMap.set(k, reverse[i]);
+        }
+        delete reversePatches[stepIdx];
+    }
+
+    // --- metadata for current position ---
+
+    function currentMeta() {
+        if (currentStep === 0) {
+            return {
+                turn_index: initialState.turn_index || 0,
+                lap: initialState.lap || 0,
+                entity_stats: initialState.entity_stats || [],
+            };
+        }
+        const d = stepDiffs[currentStep - 1];
+        return {
+            turn_index: d.turn_index || 0,
+            lap: d.lap || 0,
+            entity_stats: d.entity_stats || [],
+        };
+    }
+
+    // --- display ---
 
     function formatType(type) {
         if (!type) return '—';
@@ -327,17 +379,25 @@ class ReplayBoard {
         return type;
     }
 
-    function updateStatusTable(state) {
+    function getCurrentPlayerColor(turnIndex) {
+        const entities = initialState && initialState.entities;
+        if (!entities || !entities.length) return null;
+        return entities[turnIndex % entities.length].color;
+    }
+
+    function updateStatusTable(entityStats, turnIndex) {
         statusTableBody.innerHTML = '';
-        if (!state || !state.entity_stats || !state.entity_stats.length) {
+        if (!entityStats || !entityStats.length) {
             const row = statusTableBody.insertRow();
             row.innerHTML = '<td colspan="4">No entities</td>';
             return;
         }
-        for (const e of state.entity_stats) {
+        const activeColor = getCurrentPlayerColor(turnIndex);
+        for (const e of entityStats) {
             const row = statusTableBody.insertRow();
+            const marker = (e.color === activeColor) ? '▸' : '\u2002';
             row.innerHTML = `
-                <td>${formatType(e.type)}</td>
+                <td>${marker} ${formatType(e.type)}</td>
                 <td>${e.hex_pct != null ? e.hex_pct : '—'}</td>
                 <td>${e.money != null ? e.money : '—'}</td>
                 <td>${e.income != null ? e.income : '—'}</td>
@@ -345,11 +405,14 @@ class ReplayBoard {
         }
     }
 
-    function displayState(state) {
-        if (!state || !state.hexes) return;
-        board.setHexes(state.hexes);
-        updateTurnCounter(state);
-        updateStatusTable(state);
+    function displayCurrentState() {
+        const hexes = Array.from(hexMap.values());
+        board.setHexes(hexes);
+        const meta = currentMeta();
+        const turn = meta.turn_index, lap = meta.lap;
+        turnCounterEl.textContent = `Turn: ${lap}-${turn}`;
+        updateStatusTable(meta.entity_stats, meta.turn_index);
+        board.render();
     }
 
     function updateButtonStates() {
@@ -357,111 +420,105 @@ class ReplayBoard {
         const btnBack = document.getElementById('btnBack');
         const btnFwd = document.getElementById('btnFwd');
         const btnEnd = document.getElementById('btnEnd');
-        const atBeginning = eventIndex <= 0;
-        const atEnd = eventIndex >= events.length;
-        if (btnBegin) btnBegin.disabled = atBeginning;
-        if (btnBack) btnBack.disabled = atBeginning;
+        const atStart = currentStep <= 0;
+        const atEnd = currentStep >= stepDiffs.length;
+        if (btnBegin) btnBegin.disabled = atStart;
+        if (btnBack) btnBack.disabled = atStart;
         if (btnFwd) btnFwd.disabled = atEnd;
         if (btnEnd) btnEnd.disabled = atEnd;
     }
 
-    /** Deep-clone state (hexes and top-level fields) for mutating. */
-    function cloneState(state) {
-        if (!state) return null;
-        const hexes = (state.hexes || []).map(h => ({ ...h }));
-        return {
-            hexes,
-            entities: state.entities ? state.entities.map(e => ({ ...e })) : [],
-            entity_stats: state.entity_stats ? state.entity_stats.map(e => ({ ...e })) : [],
-            turn_index: state.turn_index != null ? state.turn_index : 0,
-            lap: state.lap != null ? state.lap : 0,
-        };
+    // --- animation ---
+
+    function hexToPixelCoords(c1, c2) {
+        const effectiveHexSize = board.hexSize * board.spacingMultiplier;
+        const pos = typeof hexToPixel === 'function'
+            ? hexToPixel(c1, c2, effectiveHexSize)
+            : { x: 0, y: 0 };
+        return { x: pos.x * board.scale + board.offsetX, y: pos.y * board.scale + board.offsetY };
     }
 
-    function findHex(state, c1, c2) {
-        if (!state || !state.hexes) return null;
-        return state.hexes.find(h => h.coordinate1 === c1 && h.coordinate2 === c2) || null;
-    }
-
-    /** Apply a single encoded event to state (mutates state.hexes, state.turn_index, state.lap). */
-    function applyEvent(state, enc) {
-        if (!state || !enc || typeof enc !== 'string') return;
-        const parts = enc.trim().split(/\s+/);
-        if (parts.length < 1) return;
-        const key = parts[0];
-        const p = parts.slice(1);
-
-        if (key === 'um' && p.length >= 4) {
-            const c1 = parseInt(p[0], 10); const c2 = parseInt(p[1], 10);
-            const c3 = parseInt(p[2], 10); const c4 = parseInt(p[3], 10);
-            const start = findHex(state, c1, c2);
-            const finish = findHex(state, c3, c4);
-            if (start && finish && start.piece) {
-                finish.piece = start.piece;
-                finish.unit_id = start.unit_id != null ? start.unit_id : -1;
-                finish.is_ready = start.is_ready;
-                start.piece = null;
-                start.unit_id = null;
-                if (p.length >= 5 && p[4] === '1') finish.color = start.color;
+    function runAnimation(animation, onComplete) {
+        if (!animation || !board || !board.animationSystem) {
+            if (onComplete) onComplete();
+            return;
+        }
+        const sys = board.animationSystem;
+        function tick() {
+            sys.update();
+            if (board && typeof board.render === 'function') board.render();
+            const inProgress = sys.animations.some(a =>
+                (a.type === 'unit_move' || a.type === 'piece_build') && !a.completed);
+            if (!inProgress) {
+                sys.clearCompletedAnimations();
+                if (onComplete) onComplete();
+                return;
             }
-        } else if (key === 'pa' && p.length >= 3) {
-            const c1 = parseInt(p[0], 10); const c2 = parseInt(p[1], 10);
-            const piece = p[2];
-            const unitId = p.length > 3 ? parseInt(p[3], 10) : -1;
-            const hex = findHex(state, c1, c2);
-            if (hex) {
-                hex.piece = piece;
-                if (unitId !== -1) hex.unit_id = unitId;
-            }
-        } else if (key === 'pd' && p.length >= 2) {
-            const c1 = parseInt(p[0], 10); const c2 = parseInt(p[1], 10);
-            const hex = findHex(state, c1, c2);
-            if (hex) { hex.piece = null; hex.unit_id = null; }
-        } else if (key === 'te' && p.length >= 2) {
-            const n = state.entities && state.entities.length ? state.entities.length : 1;
-            state.turn_index = ((state.turn_index != null ? state.turn_index : 0) + 1) % n;
-            if (state.turn_index === 0) state.lap = (state.lap || 0) + 1;
-        } else if (key === 'hcc' && p.length >= 3) {
-            const c1 = parseInt(p[0], 10); const c2 = parseInt(p[1], 10);
-            const hex = findHex(state, c1, c2);
-            if (hex) hex.color = p[2];
-        } else if (key === 'pb' && p.length >= 3) {
-            const c1 = parseInt(p[0], 10); const c2 = parseInt(p[1], 10);
-            const hex = findHex(state, c1, c2);
-            if (hex) hex.piece = p[2];
+            requestAnimationFrame(tick);
+        }
+        if (animation.type === 'unit_move') {
+            const src = animation.source || {};
+            const tgt = animation.target || {};
+            const startPx = hexToPixelCoords(src.coordinate1, src.coordinate2);
+            const endPx = hexToPixelCoords(tgt.coordinate1, tgt.coordinate2);
+            sys.addUnitMoveAnimation(
+                startPx.x, startPx.y, endPx.x, endPx.y,
+                animation.piece_type || 'peasant',
+                { coordinate1: src.coordinate1, coordinate2: src.coordinate2 },
+                { coordinate1: tgt.coordinate1, coordinate2: tgt.coordinate2 },
+                true, false
+            );
+            requestAnimationFrame(tick);
+        } else if (animation.type === 'piece_build') {
+            const tgt = animation.target || {};
+            const px = hexToPixelCoords(tgt.coordinate1, tgt.coordinate2);
+            sys.addPieceBuildAnimation(px.x, px.y, (animation.piece_type || 'peasant').toLowerCase(), true);
+            requestAnimationFrame(tick);
+        } else {
+            if (onComplete) onComplete();
         }
     }
 
+    // --- navigation ---
+
     function goToBeginning() {
-        currentState = cloneState(beginningState);
-        eventIndex = 0;
-        displayState(currentState);
+        hexMap = buildHexMap(initialState.hexes);
+        reversePatches = {};
+        currentStep = 0;
+        displayCurrentState();
         updateButtonStates();
     }
 
-    function goOneEventBack() {
-        if (eventIndex <= 0) return;
-        eventIndex--;
-        currentState = cloneState(beginningState);
-        for (let i = 0; i < eventIndex; i++) applyEvent(currentState, events[i]);
-        displayState(currentState);
+    function goOneStepBack() {
+        if (currentStep <= 0) return;
+        currentStep--;
+        applyBackward(currentStep);
+        displayCurrentState();
         updateButtonStates();
     }
 
-    function goOneEventForward() {
-        if (eventIndex >= events.length) return;
-        applyEvent(currentState, events[eventIndex]);
-        eventIndex++;
-        displayState(currentState);
-        updateButtonStates();
+    function goOneStepForward() {
+        if (currentStep >= stepDiffs.length) return;
+        const idx = currentStep;
+        const diff = stepDiffs[idx];
+        runAnimation(diff.animation, function() {
+            applyForward(idx);
+            currentStep = idx + 1;
+            displayCurrentState();
+            updateButtonStates();
+        });
     }
 
     function goToEnd() {
-        currentState = cloneState(endState);
-        eventIndex = events.length;
-        displayState(currentState);
+        while (currentStep < stepDiffs.length) {
+            applyForward(currentStep);
+            currentStep++;
+        }
+        displayCurrentState();
         updateButtonStates();
     }
+
+    // --- init ---
 
     function initBoard() {
         const container = document.getElementById('replayBoard');
@@ -483,8 +540,8 @@ class ReplayBoard {
         const btnFwd = document.getElementById('btnFwd');
         const btnEnd = document.getElementById('btnEnd');
         if (btnBegin) btnBegin.addEventListener('click', goToBeginning);
-        if (btnBack) btnBack.addEventListener('click', goOneEventBack);
-        if (btnFwd) btnFwd.addEventListener('click', goOneEventForward);
+        if (btnBack) btnBack.addEventListener('click', goOneStepBack);
+        if (btnFwd) btnFwd.addEventListener('click', goOneStepForward);
         if (btnEnd) btnEnd.addEventListener('click', goToEnd);
     }
 
@@ -506,20 +563,20 @@ class ReplayBoard {
                     showLoading(data.error || 'Invalid replay.');
                     return;
                 }
-                const initial = data.initial_state || null;
-                const final = data.final_state || null;
-                const eventList = Array.isArray(data.events) ? data.events : [];
-                if (!final) {
-                    showLoading('Invalid replay: no state data.');
+                initialState = data.initial_state;
+                stepDiffs = Array.isArray(data.step_diffs) ? data.step_diffs : [];
+                if (!initialState || !initialState.hexes || !initialState.hexes.length) {
+                    showLoading('Invalid replay: no initial state.');
                     return;
                 }
-                beginningState = initial || final;
-                endState = final;
-                events = eventList;
-                eventIndex = events.length;
-                currentState = cloneState(endState);
+
+                // Build hex map from initial state, then fast-forward to end
+                hexMap = buildHexMap(initialState.hexes);
+                for (let i = 0; i < stepDiffs.length; i++) applyForward(i);
+                currentStep = stepDiffs.length;
+
                 hideLoading();
-                displayState(currentState);
+                displayCurrentState();
                 updateButtonStates();
             })
             .catch(err => {

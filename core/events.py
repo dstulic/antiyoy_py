@@ -127,6 +127,9 @@ class EventKeys:
         EventType.HEX_CHANGE_COLOR: "hcc",
         EventType.SET_MONEY: "sm",
         EventType.TURN_END: "te",
+        EventType.TURN_BEGIN: "tb",
+        EventType.LAP_BEGIN: "lb",
+        EventType.PLAYER_TURN_STATS: "pts",
         EventType.GRAPH_CREATED: "gc",
         EventType.MATCH_STARTED: "mc",
         EventType.UNIT_MOVE: "um",
@@ -161,13 +164,15 @@ class EventKeys:
 # Event implementations
 
 class EventTurnEnd(AbstractEvent):
-    """Event for ending a turn."""
+    """Event for ending a turn. For replay: turn_index_after/lap_after set state after switch."""
 
     def __init__(self):
         """Initialize turn end event."""
         super().__init__()
         self.target_end_time: int = 0
         self.current_color: Optional[HColor] = None
+        self.turn_index_after: int = -1
+        self.lap_after: int = -1
 
     def get_type(self) -> EventType:
         """Get event type."""
@@ -179,20 +184,30 @@ class EventTurnEnd(AbstractEvent):
 
     def apply_change(self) -> None:
         """Apply turn end."""
-        if self.core_model and self.core_model.turns_manager:
-            self.core_model.turns_manager.do_switch_turn_index()
+        tm = self.core_model.turns_manager if self.core_model else None
+        if not tm:
+            return
+        if self.turn_index_after >= 0 and self.lap_after >= 0:
+            tm.turn_index = self.turn_index_after
+            tm.lap = self.lap_after
+        else:
+            tm.do_switch_turn_index()
 
     def copy_from(self, src_event: AbstractEvent) -> None:
         """Copy from another event."""
         if isinstance(src_event, EventTurnEnd):
             self.current_color = src_event.current_color
             self.target_end_time = src_event.target_end_time
+            self.turn_index_after = src_event.turn_index_after
+            self.lap_after = src_event.lap_after
 
     def _get_local_encoded_info(self) -> str:
-        """Get encoded info."""
+        """Encode: target_end_time current_color turn_index_after lap_after (for replay)."""
         time_str = str(self.target_end_time) if self.target_end_time > 0 else "-"
-        color_str = str(self.current_color) if self.current_color else ""
-        return f"{time_str} {color_str}"
+        color_str = self.current_color.value if self.current_color else ""
+        ti = self.turn_index_after if self.turn_index_after >= 0 else "-"
+        lap = self.lap_after if self.lap_after >= 0 else "-"
+        return f"{time_str} {color_str} {ti} {lap}"
 
     def set_target_end_time(self, target_end_time: int) -> None:
         """Set target end time."""
@@ -201,6 +216,119 @@ class EventTurnEnd(AbstractEvent):
     def set_current_color(self, current_color: HColor) -> None:
         """Set current color."""
         self.current_color = current_color
+
+    def set_turn_index_lap_after(self, turn_index: int, lap: int) -> None:
+        """Set turn index and lap after this turn end (for replay)."""
+        self.turn_index_after = turn_index
+        self.lap_after = lap
+
+
+class EventTurnBegin(AbstractEvent):
+    """Marker event: whose turn it is now (for replay)."""
+
+    def __init__(self):
+        super().__init__()
+        self.turn_index: int = 0
+        self.lap: int = 0
+        self.color: Optional[HColor] = None
+
+    def get_type(self) -> EventType:
+        return EventType.TURN_BEGIN
+
+    def is_valid(self) -> bool:
+        return True
+
+    def apply_change(self) -> None:
+        if self.core_model and self.core_model.turns_manager:
+            self.core_model.turns_manager.turn_index = self.turn_index
+            self.core_model.turns_manager.lap = self.lap
+
+    def copy_from(self, src_event: AbstractEvent) -> None:
+        if isinstance(src_event, EventTurnBegin):
+            self.turn_index = src_event.turn_index
+            self.lap = src_event.lap
+            self.color = src_event.color
+
+    def _get_local_encoded_info(self) -> str:
+        ti = str(self.turn_index)
+        lap = str(self.lap)
+        color_str = self.color.value if self.color else ""
+        return f"{ti} {lap} {color_str}"
+
+    def set_turn_index(self, v: int) -> None:
+        self.turn_index = v
+
+    def set_lap(self, v: int) -> None:
+        self.lap = v
+
+    def set_color(self, c: HColor) -> None:
+        self.color = c
+
+
+class EventLapBegin(AbstractEvent):
+    """Marker event: start of a new lap (for replay)."""
+
+    def __init__(self):
+        super().__init__()
+        self.lap: int = 0
+
+    def get_type(self) -> EventType:
+        return EventType.LAP_BEGIN
+
+    def is_valid(self) -> bool:
+        return True
+
+    def apply_change(self) -> None:
+        if self.core_model and self.core_model.turns_manager:
+            self.core_model.turns_manager.lap = self.lap
+
+    def copy_from(self, src_event: AbstractEvent) -> None:
+        if isinstance(src_event, EventLapBegin):
+            self.lap = src_event.lap
+
+    def _get_local_encoded_info(self) -> str:
+        return str(self.lap)
+
+    def set_lap(self, v: int) -> None:
+        self.lap = v
+
+
+class EventPlayerTurnStats(AbstractEvent):
+    """Cumulative money and income for a player at end of their turn (for replay/verification)."""
+
+    def __init__(self):
+        super().__init__()
+        self.color: Optional[HColor] = None
+        self.total_money: int = 0
+        self.total_income: int = 0
+
+    def get_type(self) -> EventType:
+        return EventType.PLAYER_TURN_STATS
+
+    def is_valid(self) -> bool:
+        return True
+
+    def apply_change(self) -> None:
+        pass
+
+    def copy_from(self, src_event: AbstractEvent) -> None:
+        if isinstance(src_event, EventPlayerTurnStats):
+            self.color = src_event.color
+            self.total_money = src_event.total_money
+            self.total_income = src_event.total_income
+
+    def _get_local_encoded_info(self) -> str:
+        color_str = self.color.value if self.color else ""
+        return f"{color_str} {self.total_money} {self.total_income}"
+
+    def set_color(self, c: HColor) -> None:
+        self.color = c
+
+    def set_total_money(self, v: int) -> None:
+        self.total_money = v
+
+    def set_total_income(self, v: int) -> None:
+        self.total_income = v
 
 
 class EventHexChangeColor(AbstractEvent):
@@ -282,8 +410,8 @@ class EventUnitMove(AbstractEvent):
             if not self.core_model.readiness_manager.is_ready(self.start):
                 return False
         
-        # Check move zone for color transfer (enemy hex capture)
-        if self.are_color_transfer_conditions_satisfied():
+        # Check move zone for color transfer (enemy hex capture); skip for quick/replay events
+        if not self.is_quick() and self.are_color_transfer_conditions_satisfied():
             if self.core_model and self.core_model.move_zone_manager:
                 self.core_model.move_zone_manager.update_for_unit(self.start)
                 if not self.core_model.move_zone_manager.contains(self.finish):
@@ -496,13 +624,13 @@ class EventPieceBuild(AbstractEvent):
                 reward = self.core_model.ruleset.get_tree_reward()
                 province.set_money(province.get_money() + reward)
         
-        # Set piece on hex
+        # Set piece on hex and claim hex for province (so replay matches saved state)
         self.hex.set_piece(self.piece_type)
+        self.hex.set_color(province.get_color())
         
-        # For units, set unit ID and color
+        # For units, set unit ID
         if is_unit(self.piece_type):
             self.hex.set_unit_id(self.unit_id)
-            self.hex.set_color(province.get_color())
             
             # Set readiness: unit is ready only if built on empty hex within province
             # If built on gray hex (outside province), it counts as a move and is not ready
@@ -1038,6 +1166,9 @@ class EventsFactory:
             EventType.UNIT_MOVE: EventUnitMove,
             EventType.PIECE_DELETE: EventPieceDelete,
             EventType.TURN_END: EventTurnEnd,
+            EventType.TURN_BEGIN: EventTurnBegin,
+            EventType.LAP_BEGIN: EventLapBegin,
+            EventType.PLAYER_TURN_STATS: EventPlayerTurnStats,
             EventType.HEX_CHANGE_COLOR: EventHexChangeColor,
             EventType.SET_MONEY: EventSetMoney,
             EventType.PIECE_BUILD: EventPieceBuild,

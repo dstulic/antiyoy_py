@@ -216,9 +216,11 @@ class CommandExecutor:
         """Execute end turn command."""
         events_factory = self.game_state.events_manager.factory
         event = events_factory.create_event(EventType.TURN_END)
-        
-        if event:
-            self.game_state.events_manager.apply_event(event)
-            return True, None
-        
-        return False, "Failed to create turn end event"
+        if not event:
+            return False, "Failed to create turn end event"
+        # Set current player color so replay can record who ended their turn
+        current_entity = self.game_state.entities_manager.get_current_entity()
+        if current_entity and hasattr(event, "set_current_color"):
+            event.set_current_color(current_entity.color)
+        self.game_state.events_manager.apply_event(event)
+        return True, None

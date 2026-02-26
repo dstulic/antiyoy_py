@@ -19,6 +19,7 @@ SECTION_EVENTS_LIST = "events_list"
 SECTION_CAMPAIGN = "campaign"
 SECTION_PAUSE_NAME = "pause_name"
 SECTION_RNG_STATE = "rng_state"
+SECTION_REPLAY_SNAPSHOTS = "replay_snapshots"
 SECTION_ORIGINAL_LEVEL_CODE = "original_level_code"
 
 # Unused sections: vestiges of the original game format. Still appear in campaign/levels.py

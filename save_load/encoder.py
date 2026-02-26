@@ -18,6 +18,7 @@ from save_load.format import (
     SECTION_CAMPAIGN,
     SECTION_PAUSE_NAME,
     SECTION_RNG_STATE,
+    SECTION_REPLAY_SNAPSHOTS,
     SECTION_ORIGINAL_LEVEL_CODE,
 )
 from core.game_state import GameState
@@ -98,6 +99,14 @@ class GameStateEncoder:
         else:
             builder.append(start_section(SECTION_EVENTS_LIST))
             builder.append("")  # Empty if no history manager
+
+        # Replay snapshots (hex state at each step for perfect replay)
+        if hasattr(game_state, 'history_manager') and game_state.history_manager and game_state.history_manager.replay_snapshots:
+            import base64 as b64mod
+            raw = game_state.history_manager.encode_snapshots()
+            encoded = b64mod.b64encode(raw.encode("utf-8")).decode("ascii")
+            builder.append(start_section(SECTION_REPLAY_SNAPSHOTS))
+            builder.append(encoded)
 
         # Campaign
         if campaign_level_index != -1:

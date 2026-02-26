@@ -1209,6 +1209,39 @@ def api_replays_list():
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
+def _steps_to_diff_format(steps):
+    """Convert full-state replay steps to diff format: initial_state + per-step hex changes only."""
+    if not steps:
+        return None, []
+    initial_state = steps[0]["state"]
+    prev_hex_map = {}
+    for h in initial_state.get("hexes", []):
+        prev_hex_map[(h["coordinate1"], h["coordinate2"])] = h
+    step_diffs = []
+    for step in steps[1:]:
+        state = step["state"]
+        current_hex_map = {}
+        for h in state.get("hexes", []):
+            current_hex_map[(h["coordinate1"], h["coordinate2"])] = h
+        hex_changes = []
+        for key, h in current_hex_map.items():
+            prev = prev_hex_map.get(key)
+            if (prev is None
+                    or prev.get("color") != h.get("color")
+                    or prev.get("piece") != h.get("piece")
+                    or prev.get("unit_id") != h.get("unit_id")):
+                hex_changes.append(h)
+        step_diffs.append({
+            "hex_changes": hex_changes,
+            "animation": step.get("animation"),
+            "turn_index": step.get("turn_index", 0),
+            "lap": step.get("lap", 0),
+            "entity_stats": state.get("entity_stats", []),
+        })
+        prev_hex_map = current_hex_map
+    return initial_state, step_diffs
+
+
 @app.route('/api/replay/content', methods=['GET'])
 def api_replay_content():
     """Get initial and final level code for a replay. path = relative path under replays/."""
@@ -1291,11 +1324,26 @@ def api_replay_content():
     if not initial_state:
         initial_state = final_state
 
+    # Compute replay steps then convert to diff format for compact transfer
+    from save_load.replay_steps import compute_replay_steps
+    from save_load.decoder import GameStateDecoder
+    from save_load.encoder import GameStateEncoder
+    decoder_instance = GameStateDecoder()
+    encoder_instance = GameStateEncoder()
+    steps = compute_replay_steps(
+        initial_level_code,
+        final_level_code,
+        _game_state_to_replay_json,
+        decoder_instance,
+        encoder_instance,
+    )
+
+    diff_initial, step_diffs = _steps_to_diff_format(steps)
+
     return jsonify({
         'success': True,
-        'initial_state': initial_state,
-        'final_state': final_state,
-        'events': events_list,
+        'initial_state': diff_initial or initial_state,
+        'step_diffs': step_diffs,
     })
 
 
