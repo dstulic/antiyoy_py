@@ -19,9 +19,13 @@
                 <button class="replay-btn replay-seek-btn" id="btnBegin" title="Go to beginning">|<</button>
                 <button class="replay-btn replay-seek-btn" id="btnBack" title="Go one event back" disabled><<</button>
                 <button class="replay-btn replay-seek-btn" id="btnPause" title="Pause" disabled>||</button>
-                <button class="replay-btn replay-seek-btn" id="btnPlay" title="Play" disabled>></button>
+                <input type="range" id="speedSlider" class="replay-speed-slider" min="1" max="100" value="50" orient="vertical" title="Playback speed">
+                <button class="replay-btn replay-seek-btn" id="btnPlay" title="Play">></button>
                 <button class="replay-btn replay-seek-btn" id="btnFwd" title="Go one event forward" disabled>>></button>
                 <button class="replay-btn replay-seek-btn" id="btnEnd" title="Go to end">>|</button>
+            </div>
+            <div class="replay-control-right">
+                <input type="range" id="replayScrubber" class="replay-scrubber" min="0" max="0" value="0" title="Scrub through replay">
             </div>
         </div>
 

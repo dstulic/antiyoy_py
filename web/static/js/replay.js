@@ -307,6 +307,32 @@ class ReplayBoard {
     const statusTableBody = document.getElementById('replayStatusTableBody');
     const statusOverlay = document.getElementById('replayStatusOverlay');
     const statusToggle = document.getElementById('replayStatusToggle');
+    const scrubberEl = document.getElementById('replayScrubber');
+    const speedSliderEl = document.getElementById('speedSlider');
+    const btnPause = document.getElementById('btnPause');
+    const btnPlay = document.getElementById('btnPlay');
+
+    // --- playback state ---
+    let playing = false;
+    let playTimer = null;
+
+    // Speed slider (1–100) maps to a multiplier: low value = slow, high value = fast.
+    // Multiplier controls animation duration (divided) and inter-step delay (divided).
+    const SPEED_SLIDER_MIN = 1;                // slider min value
+    const SPEED_SLIDER_MAX = 100;              // slider max value
+    const SPEED_MULTIPLIER_AT_MIN = 0.15;      // slowest: animations take ~6.7x longer
+    const SPEED_MULTIPLIER_AT_MAX = 8.0;       // fastest: animations take 1/8 as long
+    const DEFAULT_INTER_STEP_DELAY_MS = 400;   // base pause between steps at multiplier 1.0
+
+    function getSpeedMultiplier() {
+        if (!speedSliderEl) return 1.0;
+        const t = (parseInt(speedSliderEl.value, 10) - SPEED_SLIDER_MIN) / (SPEED_SLIDER_MAX - SPEED_SLIDER_MIN);
+        return SPEED_MULTIPLIER_AT_MIN * Math.pow(SPEED_MULTIPLIER_AT_MAX / SPEED_MULTIPLIER_AT_MIN, t);
+    }
+
+    function getInterStepDelay() {
+        return DEFAULT_INTER_STEP_DELAY_MS / getSpeedMultiplier();
+    }
 
     function hideLoading() { if (loadingEl) loadingEl.style.display = 'none'; }
     function showLoading(msg) {
@@ -424,8 +450,10 @@ class ReplayBoard {
         const atEnd = currentStep >= stepDiffs.length;
         if (btnBegin) btnBegin.disabled = atStart;
         if (btnBack) btnBack.disabled = atStart;
-        if (btnFwd) btnFwd.disabled = atEnd;
+        if (btnFwd) btnFwd.disabled = atEnd || playing;
         if (btnEnd) btnEnd.disabled = atEnd;
+        if (scrubberEl) scrubberEl.value = currentStep;
+        updatePlayPauseButtons();
     }
 
     // --- animation ---
@@ -456,6 +484,7 @@ class ReplayBoard {
             }
             requestAnimationFrame(tick);
         }
+        const speedMul = getSpeedMultiplier();
         if (animation.type === 'unit_move') {
             const src = animation.source || {};
             const tgt = animation.target || {};
@@ -468,20 +497,69 @@ class ReplayBoard {
                 { coordinate1: tgt.coordinate1, coordinate2: tgt.coordinate2 },
                 true, false
             );
+            const anim = sys.animations[sys.animations.length - 1];
+            anim.duration = Math.max(30, anim.duration / speedMul);
             requestAnimationFrame(tick);
         } else if (animation.type === 'piece_build') {
             const tgt = animation.target || {};
             const px = hexToPixelCoords(tgt.coordinate1, tgt.coordinate2);
             sys.addPieceBuildAnimation(px.x, px.y, (animation.piece_type || 'peasant').toLowerCase(), true);
+            const anim = sys.animations[sys.animations.length - 1];
+            anim.duration = Math.max(30, anim.duration / speedMul);
             requestAnimationFrame(tick);
         } else {
             if (onComplete) onComplete();
         }
     }
 
-    // --- navigation ---
+    // --- playback (play / pause) ---
+
+    function stopPlayback() {
+        if (!playing) return;
+        playing = false;
+        if (playTimer) { clearTimeout(playTimer); playTimer = null; }
+        updateButtonStates();
+    }
+
+    function updatePlayPauseButtons() {
+        if (btnPause) btnPause.disabled = !playing;
+        if (btnPlay) btnPlay.disabled = playing || currentStep >= stepDiffs.length;
+    }
+
+    function playNextStep() {
+        if (!playing || currentStep >= stepDiffs.length) {
+            stopPlayback();
+            return;
+        }
+        const idx = currentStep;
+        const diff = stepDiffs[idx];
+        runAnimation(diff.animation, function() {
+            if (!playing) return;
+            applyForward(idx);
+            currentStep = idx + 1;
+            displayCurrentState();
+            updateButtonStates();
+            if (currentStep >= stepDiffs.length) {
+                stopPlayback();
+                return;
+            }
+            playTimer = setTimeout(playNextStep, getInterStepDelay());
+        });
+    }
+
+    function startPlayback() {
+        if (playing) return;
+        if (currentStep >= stepDiffs.length) return;
+        playing = true;
+        updatePlayPauseButtons();
+        updateButtonStates();
+        playNextStep();
+    }
+
+    // --- navigation (all auto-pause) ---
 
     function goToBeginning() {
+        stopPlayback();
         hexMap = buildHexMap(initialState.hexes);
         reversePatches = {};
         currentStep = 0;
@@ -490,6 +568,7 @@ class ReplayBoard {
     }
 
     function goOneStepBack() {
+        stopPlayback();
         if (currentStep <= 0) return;
         currentStep--;
         applyBackward(currentStep);
@@ -498,6 +577,7 @@ class ReplayBoard {
     }
 
     function goOneStepForward() {
+        stopPlayback();
         if (currentStep >= stepDiffs.length) return;
         const idx = currentStep;
         const diff = stepDiffs[idx];
@@ -510,9 +590,35 @@ class ReplayBoard {
     }
 
     function goToEnd() {
+        stopPlayback();
         while (currentStep < stepDiffs.length) {
             applyForward(currentStep);
             currentStep++;
+        }
+        displayCurrentState();
+        updateButtonStates();
+    }
+
+    function seekToStep(target) {
+        stopPlayback();
+        target = Math.max(0, Math.min(stepDiffs.length, target));
+        if (target === currentStep) return;
+        if (target < currentStep) {
+            if (target === 0) {
+                hexMap = buildHexMap(initialState.hexes);
+                reversePatches = {};
+                currentStep = 0;
+            } else {
+                while (currentStep > target) {
+                    currentStep--;
+                    applyBackward(currentStep);
+                }
+            }
+        } else {
+            while (currentStep < target) {
+                applyForward(currentStep);
+                currentStep++;
+            }
         }
         displayCurrentState();
         updateButtonStates();
@@ -543,6 +649,11 @@ class ReplayBoard {
         if (btnBack) btnBack.addEventListener('click', goOneStepBack);
         if (btnFwd) btnFwd.addEventListener('click', goOneStepForward);
         if (btnEnd) btnEnd.addEventListener('click', goToEnd);
+        if (btnPlay) btnPlay.addEventListener('click', startPlayback);
+        if (btnPause) btnPause.addEventListener('click', stopPlayback);
+        if (scrubberEl) scrubberEl.addEventListener('input', function() {
+            seekToStep(parseInt(scrubberEl.value, 10));
+        });
     }
 
     function run() {
@@ -568,6 +679,11 @@ class ReplayBoard {
                 if (!initialState || !initialState.hexes || !initialState.hexes.length) {
                     showLoading('Invalid replay: no initial state.');
                     return;
+                }
+
+                if (scrubberEl) {
+                    scrubberEl.max = stepDiffs.length;
+                    scrubberEl.value = stepDiffs.length;
                 }
 
                 // Build hex map from initial state, then fast-forward to end
