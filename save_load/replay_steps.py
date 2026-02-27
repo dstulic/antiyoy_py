@@ -163,7 +163,7 @@ _PIECE_CONSUMPTION = {
 def _build_entity_stats(hexes_list: list, entities: list, provinces: list) -> list:
     if not entities:
         return []
-    total_colored = sum(1 for h in hexes_list if h.get("color") not in (None, "gray"))
+    total_hexes = len(hexes_list)
     color_income = {}
     color_hexcount = {}
     for h in hexes_list:
@@ -183,7 +183,7 @@ def _build_entity_stats(hexes_list: list, entities: list, provinces: list) -> li
     for e in entities:
         color = e["color"]
         n_hexes = color_hexcount.get(color, 0)
-        pct = round(100.0 * n_hexes / total_colored, 1) if total_colored > 0 else 0.0
+        pct = round(100.0 * n_hexes / total_hexes, 1) if total_hexes > 0 else 0.0
         money = sum(p["money"] for p in provinces if p["color"] == color)
         stats.append({
             "type": e["type"], "color": color, "name": e["name"],
