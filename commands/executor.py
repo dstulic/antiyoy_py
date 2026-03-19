@@ -66,9 +66,11 @@ class CommandExecutor:
             # Check if merge result is valid
             merge_result = get_merge_result(command.start_hex.piece, command.finish_hex.piece)
             if merge_result is not None:
-                # Create merge event
+                current_entity = self.game_state.entities_manager.get_current_entity()
+                if not current_entity:
+                    return False, "No current player"
                 events_factory = self.game_state.events_manager.factory
-                event = events_factory.create_event(EventType.MERGE)
+                event = events_factory.create_event(EventType.MERGE, author=current_entity)
                 if not event:
                     return False, "Failed to create merge event"
                 
@@ -77,11 +79,6 @@ class CommandExecutor:
                     event.set_start(command.start_hex)
                     event.set_finish(command.finish_hex)
                     event.set_unit_id(self.game_state.get_id_for_new_unit())
-                    
-                    # Get current entity for author
-                    current_entity = self.game_state.entities_manager.get_current_entity()
-                    if current_entity:
-                        event.set_author(current_entity)
                     
                     # Validate event
                     if not event.is_valid():
@@ -101,8 +98,11 @@ class CommandExecutor:
                         return False, f"Failed to apply merge event: {str(e)}"
         
         # Regular move event
+        current_entity = self.game_state.entities_manager.get_current_entity()
+        if not current_entity:
+            return False, "No current player"
         events_factory = self.game_state.events_manager.factory
-        event = events_factory.create_event(EventType.UNIT_MOVE)
+        event = events_factory.create_event(EventType.UNIT_MOVE, author=current_entity)
         
         if event:
             from core.events import EventUnitMove
@@ -146,9 +146,8 @@ class CommandExecutor:
             # Check if merge result is valid
             merge_result = get_merge_result(command.piece_type, command.hex.piece)
             if merge_result is not None:
-                # Create merge on build event
                 events_factory = self.game_state.events_manager.factory
-                event = events_factory.create_event(EventType.MERGE_ON_BUILD)
+                event = events_factory.create_event(EventType.MERGE_ON_BUILD, author=current_entity)
                 if not event:
                     return False, "Failed to create merge on build event"
                 
@@ -158,7 +157,6 @@ class CommandExecutor:
                     event.set_piece_type(command.piece_type)
                     event.set_province_id(province.get_id())
                     event.set_unit_id(self.game_state.get_id_for_new_unit())
-                    event.set_author(current_entity)
                     
                     # Validate event
                     if not event.is_valid():
@@ -179,7 +177,7 @@ class CommandExecutor:
         
         # Regular build event
         events_factory = self.game_state.events_manager.factory
-        event = events_factory.create_event(EventType.PIECE_BUILD)
+        event = events_factory.create_event(EventType.PIECE_BUILD, author=current_entity)
         if not event:
             return False, "Failed to create build event"
         
@@ -194,9 +192,6 @@ class CommandExecutor:
                 event.set_unit_id(self.game_state.get_id_for_new_unit())
             else:
                 event.unit_id = -1
-            
-            # Set author
-            event.set_author(current_entity)
             
             # Validate event
             if not event.is_valid():
@@ -221,9 +216,11 @@ class CommandExecutor:
         """Execute end turn command."""
         events_factory = self.game_state.events_manager.factory
         event = events_factory.create_event(EventType.TURN_END)
-        
-        if event:
-            self.game_state.events_manager.apply_event(event)
-            return True, None
-        
-        return False, "Failed to create turn end event"
+        if not event:
+            return False, "Failed to create turn end event"
+        # Set current player color so replay can record who ended their turn
+        current_entity = self.game_state.entities_manager.get_current_entity()
+        if current_entity and hasattr(event, "set_current_color"):
+            event.set_current_color(current_entity.color)
+        self.game_state.events_manager.apply_event(event)
+        return True, None

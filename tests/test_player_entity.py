@@ -277,7 +277,7 @@ class TestEntitiesManager:
         manager.initialize([entity1, entity2])
         assert manager.contains(EntityType.HUMAN) is True
         assert manager.contains(EntityType.AI_BALANCER) is True
-        assert manager.contains(EntityType.AI_RANDOM) is False
+        assert manager.contains(EntityType.SPECTATOR) is False
 
     def test_count(self):
         """Test count() method."""
@@ -289,7 +289,7 @@ class TestEntitiesManager:
         manager.initialize([entity1, entity2, entity3])
         assert manager.count(EntityType.HUMAN) == 1
         assert manager.count(EntityType.AI_BALANCER) == 2
-        assert manager.count(EntityType.AI_RANDOM) == 0
+        assert manager.count(EntityType.SPECTATOR) == 0
 
     def test_encode_decode(self):
         """Test encode and decode."""
@@ -313,7 +313,7 @@ class TestEntitiesManager:
         core_model = MockCoreModel()
         manager = EntitiesManager(core_model)
         entity1 = PlayerEntity(manager, EntityType.AI_BALANCER, HColor.RED)
-        entity2 = PlayerEntity(manager, EntityType.AI_RANDOM, HColor.BLUE)
+        entity2 = PlayerEntity(manager, EntityType.AI_BALANCER, HColor.BLUE)
         manager.initialize([entity1, entity2])
         assert manager.is_in_ai_only_mode() is True
         entity3 = PlayerEntity(manager, EntityType.HUMAN, HColor.GREEN)

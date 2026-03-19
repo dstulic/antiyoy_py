@@ -54,7 +54,6 @@ class EntityType(Enum):
 
     HUMAN = "human"
     NET_ENTITY = "net_entity"
-    AI_RANDOM = "ai_random"
     AI_BALANCER = "ai_balancer"
     SPECTATOR = "spectator"
     DEAD_BY_DEFAULT = "dead_by_default"
@@ -70,7 +69,6 @@ class EntityType(Enum):
     def is_ai(self) -> bool:
         """Check if entity type is an AI."""
         return self in (
-            EntityType.AI_RANDOM,
             EntityType.AI_BALANCER,
             EntityType.AI_EASY,
             EntityType.AI_AVERAGE,
@@ -86,6 +84,9 @@ class EventType(Enum):
     UNIT_MOVE = "unit_move"
     PIECE_DELETE = "piece_delete"
     TURN_END = "turn_end"
+    TURN_BEGIN = "turn_begin"
+    LAP_BEGIN = "lap_begin"
+    PLAYER_TURN_STATS = "player_turn_stats"
     HEX_CHANGE_COLOR = "hex_change_color"
     SET_MONEY = "set_money"
     PIECE_BUILD = "piece_build"

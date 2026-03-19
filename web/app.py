@@ -135,6 +135,12 @@ def game(level_index):
     return render_template('game.html', level_index=level_index)
 
 
+@app.route('/replay')
+def replay_page():
+    """Replay viewer page (path to replay file passed as query param)."""
+    return render_template('replay.html')
+
+
 @app.route('/api/campaign/levels')
 def api_campaign_levels():
     """API endpoint to get campaign levels."""
@@ -271,10 +277,11 @@ def _do_game_init(level_index, difficulties=None):
         # Initialize starting money for all provinces (default is 10 if not set)
         # This matches the Java version's prepareStartingMoney() behavior
         from core.enums import EventType, PieceType
+        from core.events import SYSTEM_AUTHOR
         for province in game_state.provinces_manager.provinces:
             # Only set money if it's 0 (not already set from level code)
             if province.get_money() == 0:
-                event = game_state.events_manager.factory.create_event(EventType.SET_MONEY)
+                event = game_state.events_manager.factory.create_event(EventType.SET_MONEY, author=SYSTEM_AUTHOR)
                 if event:
                     event.province_id = province.get_id()
                     event.money = 10
@@ -324,6 +331,7 @@ def _do_game_init(level_index, difficulties=None):
             'game_state': game_state,
             'game_manager': game_manager,
             'level_index': level_index,
+            'difficulties': difficulties,  # list like ["human", "easy", "expert"] for replay filename
             'created_at': time.time(),
             'last_player_turn_event_count': last_player_turn_event_count
         }
@@ -1127,6 +1135,244 @@ def api_game_delete_save():
         return jsonify({'success': False, 'error': f'Error deleting save: {str(e)}'}), 500
 
 
+# --- Replay ---
+REPLAYS_DIR = PROJECT_ROOT / "replays"
+
+
+def _game_state_to_replay_json(game_state):
+    """Build the same shape as api_game_state response from a game_state (all hexes visible, no session)."""
+    visible_hexes = game_state.hexes if not (game_state.fog_of_war_manager and game_state.fog_of_war_manager.enabled) else game_state.get_hexes_for_player(None)
+    hexes = []
+    for hex in visible_hexes:
+        hex_data = {
+            'coordinate1': hex.coordinate1,
+            'coordinate2': hex.coordinate2,
+            'color': hex.color.value if hasattr(hex.color, 'value') else str(hex.color),
+            'piece': hex.piece.value if hex.piece and hasattr(hex.piece, 'value') else None,
+            'unit_id': hex.unit_id,
+            'is_ready': False,
+        }
+        hexes.append(hex_data)
+    entities = []
+    entity_stats = []
+    if hasattr(game_state, 'entities_manager') and game_state.entities_manager and game_state.entities_manager.entities:
+        for entity in game_state.entities_manager.entities:
+            entity_data = {
+                'type': entity.type.value if hasattr(entity.type, 'value') else str(entity.type),
+                'color': entity.color.value if hasattr(entity.color, 'value') else str(entity.color),
+                'name': entity.name,
+            }
+            entities.append(entity_data)
+            stats = game_state.get_hex_ownership_stats(entity.color)
+            money = 0
+            income = 0
+            for prov in game_state.provinces_manager.provinces:
+                if prov.get_color() == entity.color:
+                    money += prov.get_money()
+                    if game_state.economics_manager:
+                        income += game_state.economics_manager.calculate_province_income(prov)
+            entity_stats.append({
+                'type': entity_data['type'],
+                'color': entity_data['color'],
+                'name': entity.name,
+                'hex_pct': round(stats['percentage'], 1),
+                'money': money,
+                'income': income,
+            })
+    turn_index = getattr(game_state.turns_manager, 'turn_index', 0) if game_state.turns_manager else 0
+    lap = getattr(game_state.turns_manager, 'lap', 0) if game_state.turns_manager else 0
+    return {
+        'success': True,
+        'hexes': hexes,
+        'entities': entities,
+        'entity_stats': entity_stats,
+        'turn_index': turn_index,
+        'lap': lap,
+    }
+
+
+@app.route('/api/replays/list', methods=['GET'])
+def api_replays_list():
+    """List all .replay files in replays/ and subfolders (relative paths)."""
+    try:
+        if not REPLAYS_DIR.exists():
+            return jsonify({'success': True, 'replays': []})
+        replays = []
+        for path in sorted(REPLAYS_DIR.rglob("*.replay")):
+            try:
+                rel = path.relative_to(REPLAYS_DIR)
+                replays.append({'path': str(rel).replace("\\", "/"), 'name': path.name})
+            except ValueError:
+                continue
+        return jsonify({'success': True, 'replays': replays})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+def _steps_to_diff_format(steps):
+    """Convert full-state replay steps to diff format: initial_state + per-step hex changes only."""
+    if not steps:
+        return None, []
+    initial_state = steps[0]["state"]
+    prev_hex_map = {}
+    for h in initial_state.get("hexes", []):
+        prev_hex_map[(h["coordinate1"], h["coordinate2"])] = h
+    step_diffs = []
+    for step in steps[1:]:
+        state = step["state"]
+        current_hex_map = {}
+        for h in state.get("hexes", []):
+            current_hex_map[(h["coordinate1"], h["coordinate2"])] = h
+        hex_changes = []
+        for key, h in current_hex_map.items():
+            prev = prev_hex_map.get(key)
+            if (prev is None
+                    or prev.get("color") != h.get("color")
+                    or prev.get("piece") != h.get("piece")
+                    or prev.get("unit_id") != h.get("unit_id")):
+                hex_changes.append(h)
+        step_diffs.append({
+            "hex_changes": hex_changes,
+            "animation": step.get("animation"),
+            "turn_index": step.get("turn_index", 0),
+            "lap": step.get("lap", 0),
+            "entity_stats": state.get("entity_stats", []),
+        })
+        prev_hex_map = current_hex_map
+    return initial_state, step_diffs
+
+
+@app.route('/api/replay/content', methods=['GET'])
+def api_replay_content():
+    """Get initial and final level code for a replay. path = relative path under replays/."""
+    path_arg = request.args.get('path', '').strip()
+    if not path_arg:
+        return jsonify({'success': False, 'error': 'path required'}), 400
+    # Prevent directory traversal
+    if '..' in path_arg or path_arg.startswith('/'):
+        return jsonify({'success': False, 'error': 'Invalid path'}), 400
+    try:
+        full_path = (REPLAYS_DIR / path_arg).resolve()
+        full_path.relative_to(REPLAYS_DIR.resolve())
+        if not full_path.is_file():
+            return jsonify({'success': False, 'error': 'Replay not found'}), 404
+        with open(full_path, 'r', encoding='utf-8') as f:
+            final_level_code = f.read()
+    except ValueError:
+        return jsonify({'success': False, 'error': 'Replay not found'}), 404
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+    from save_load.format import get_section, has_section, SECTION_ORIGINAL_LEVEL_CODE
+    import base64
+    initial_level_code = None
+    if has_section(final_level_code, SECTION_ORIGINAL_LEVEL_CODE):
+        raw = get_section(final_level_code, SECTION_ORIGINAL_LEVEL_CODE)
+        if raw and raw.strip() and raw.strip() != '-':
+            try:
+                initial_level_code = base64.b64decode(raw.strip()).decode('utf-8')
+            except Exception:
+                initial_level_code = None
+    if not initial_level_code:
+        initial_level_code = final_level_code
+
+    # Decode states and get events list from final replay (events_list is in the save format)
+    def decode_state(level_code):
+        try:
+            from save_load.decoder import GameStateDecoder
+            from save_load.decoder import _build_adjacency_graph
+            decoder = GameStateDecoder()
+            result = decoder.decode(level_code)
+            if isinstance(result, tuple):
+                game_state, _ = result
+            else:
+                game_state = result
+            if game_state is None:
+                return None
+            _build_adjacency_graph(game_state)
+            return _game_state_to_replay_json(game_state)
+        except Exception:
+            return None
+
+    def decode_final_and_events(level_code):
+        """Decode final level code and return (state_json, events_list). events_list items are encoded strings like 'um 1 2 3 4'."""
+        try:
+            from save_load.decoder import GameStateDecoder
+            from save_load.decoder import _build_adjacency_graph
+            decoder = GameStateDecoder()
+            result = decoder.decode(level_code)
+            if isinstance(result, tuple):
+                game_state, _ = result
+            else:
+                game_state = result
+            if game_state is None:
+                return None, []
+            _build_adjacency_graph(game_state)
+            state = _game_state_to_replay_json(game_state)
+            events = []
+            if getattr(game_state, 'history_manager', None) and getattr(game_state.history_manager, 'events_list', None):
+                for he in game_state.history_manager.events_list:
+                    if getattr(he, 'event', None):
+                        events.append(he.event.encode())
+            return state, events
+        except Exception:
+            return None, []
+
+    initial_state = decode_state(initial_level_code)
+    final_state, events_list = decode_final_and_events(final_level_code)
+    if not final_state:
+        return jsonify({'success': False, 'error': 'Failed to decode replay'}), 500
+    if not initial_state:
+        initial_state = final_state
+
+    # Compute replay steps then convert to diff format for compact transfer
+    from save_load.replay_steps import compute_replay_steps
+    from save_load.decoder import GameStateDecoder
+    from save_load.encoder import GameStateEncoder
+    decoder_instance = GameStateDecoder()
+    encoder_instance = GameStateEncoder()
+    steps = compute_replay_steps(
+        initial_level_code,
+        final_level_code,
+        _game_state_to_replay_json,
+        decoder_instance,
+        encoder_instance,
+    )
+
+    diff_initial, step_diffs = _steps_to_diff_format(steps)
+
+    return jsonify({
+        'success': True,
+        'initial_state': diff_initial or initial_state,
+        'step_diffs': step_diffs,
+    })
+
+
+@app.route('/api/replay/state', methods=['POST'])
+def api_replay_state():
+    """Decode a level code and return game state JSON for replay viewer (no session)."""
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'error': 'No data provided'}), 400
+    level_code = data.get('level_code', '').strip()
+    if not level_code:
+        return jsonify({'success': False, 'error': 'level_code required'}), 400
+    try:
+        from save_load.decoder import GameStateDecoder
+        from save_load.decoder import _build_adjacency_graph
+        decoder = GameStateDecoder()
+        result = decoder.decode(level_code)
+        if isinstance(result, tuple):
+            game_state, _ = result
+        else:
+            game_state = result
+        if game_state is None:
+            return jsonify({'success': False, 'error': 'Failed to decode level code'}), 500
+        _build_adjacency_graph(game_state)
+        return jsonify(_game_state_to_replay_json(game_state))
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 @app.route('/api/game/undo', methods=['POST'])
 def api_game_undo():
     """Undo the last action."""
@@ -1441,6 +1687,29 @@ def api_game_end_turn():
         # The next /api/game/state call will return events since this point
         session_data['last_player_turn_event_count'] = last_player_turn_event_count
         
+        # Save replay when game end condition is reached (once per game)
+        if game_state.game_end_manager.is_game_ended() and not session_data.get('replay_saved'):
+            level_index = session_data.get('level_index', 0)
+            ai_levels = []
+            for e in (game_state.entities_manager.entities or []):
+                if e.is_artificial_intelligence() and e.get_ai_difficulty():
+                    ai_levels.append(e.get_ai_difficulty().value)
+            source_details = f"human-{level_index}-{'-'.join(ai_levels) if ai_levels else 'ai'}"
+            try:
+                from save_load.replay import save_replay
+                replays_dir = os.path.join(os.path.dirname(__file__), '..', 'replays')
+                saved_path = save_replay(
+                    game_state,
+                    source="web",
+                    source_details=source_details,
+                    campaign_level_index=level_index,
+                    replays_dir=replays_dir,
+                )
+                if saved_path:
+                    session_data['replay_saved'] = True
+            except Exception:
+                pass  # Don't fail the request if replay save fails
+        
         # Print hex ownership table after end turn (victory condition = % owned)
         _print_hex_ownership_table(game_state)
         
@@ -1503,6 +1772,29 @@ def api_game_win_lose_status():
     }
     if game_ended and winner_color is not None:
         payload['winner_color'] = winner_color.value if hasattr(winner_color, 'value') else str(winner_color)
+
+    # Save replay when game ended (if not already saved in end-turn flow)
+    if game_ended and not session_data.get('replay_saved'):
+        level_index = session_data.get('level_index', 0)
+        ai_levels = []
+        for e in (game_state.entities_manager.entities or []):
+            if e.is_artificial_intelligence() and e.get_ai_difficulty():
+                ai_levels.append(e.get_ai_difficulty().value)
+        source_details = f"human-{level_index}-{'-'.join(ai_levels) if ai_levels else 'ai'}"
+        try:
+            from save_load.replay import save_replay
+            replays_dir = os.path.join(os.path.dirname(__file__), '..', 'replays')
+            saved_path = save_replay(
+                game_state,
+                source="web",
+                source_details=source_details,
+                campaign_level_index=level_index,
+                replays_dir=replays_dir,
+            )
+            if saved_path:
+                session_data['replay_saved'] = True
+        except Exception:
+            pass
     return jsonify(payload)
 
 
@@ -2239,8 +2531,8 @@ def api_unit_tests_build():
             for city_hex in city_hexes:
                 if city_hex != hex_obj:  # Don't remove the hex we're building on
                     # Delete the existing city
-                    delete_event = game_state.events_manager.factory.create_event(EventType.PIECE_DELETE)
-                    from core.events import EventPieceDelete
+                    from core.events import EventPieceDelete, SYSTEM_AUTHOR
+                    delete_event = game_state.events_manager.factory.create_event(EventType.PIECE_DELETE, author=SYSTEM_AUTHOR)
                     if isinstance(delete_event, EventPieceDelete):
                         delete_event.set_hex(city_hex)
                         try:
@@ -2333,8 +2625,8 @@ def api_unit_tests_build_land():
             
             # Remove piece if any
             if hex_obj.piece:
-                delete_event = game_state.events_manager.factory.create_event(EventType.PIECE_DELETE)
-                from core.events import EventPieceDelete
+                from core.events import EventPieceDelete, SYSTEM_AUTHOR
+                delete_event = game_state.events_manager.factory.create_event(EventType.PIECE_DELETE, author=SYSTEM_AUTHOR)
                 if isinstance(delete_event, EventPieceDelete):
                     delete_event.set_hex(hex_obj)
                     game_state.events_manager.apply_event(delete_event)
@@ -2361,8 +2653,8 @@ def api_unit_tests_build_land():
             else:
                 # Change existing hex to gray
                 previous_color = hex_obj.color
-                change_color_event = game_state.events_manager.factory.create_event(EventType.HEX_CHANGE_COLOR)
-                from core.events import EventHexChangeColor
+                from core.events import EventHexChangeColor, SYSTEM_AUTHOR
+                change_color_event = game_state.events_manager.factory.create_event(EventType.HEX_CHANGE_COLOR, author=SYSTEM_AUTHOR)
                 if isinstance(change_color_event, EventHexChangeColor):
                     change_color_event.set_hex(hex_obj)
                     change_color_event.set_color(HColor.GRAY)
@@ -2403,8 +2695,8 @@ def api_unit_tests_build_land():
                 if not has_target_color_neighbor:
                     return jsonify({'success': False, 'error': 'Hex must be adjacent to a hex of the target color'}), 400
                 
-                change_color_event = game_state.events_manager.factory.create_event(EventType.HEX_CHANGE_COLOR)
-                from core.events import EventHexChangeColor
+                from core.events import EventHexChangeColor, SYSTEM_AUTHOR
+                change_color_event = game_state.events_manager.factory.create_event(EventType.HEX_CHANGE_COLOR, author=SYSTEM_AUTHOR)
                 if isinstance(change_color_event, EventHexChangeColor):
                     change_color_event.set_hex(hex_obj)
                     change_color_event.set_color(target_color)
@@ -2465,11 +2757,11 @@ def api_unit_tests_set_hex_piece():
             return jsonify({'success': False, 'error': 'Hex not found'}), 404
 
         from core.enums import EventType, PieceType
-        from core.events import EventPieceDelete
+        from core.events import EventPieceDelete, SYSTEM_AUTHOR
 
         if piece_str == 'clear':
             if hex_obj.piece:
-                delete_event = game_state.events_manager.factory.create_event(EventType.PIECE_DELETE)
+                delete_event = game_state.events_manager.factory.create_event(EventType.PIECE_DELETE, author=SYSTEM_AUTHOR)
                 if isinstance(delete_event, EventPieceDelete):
                     delete_event.set_hex(hex_obj)
                     game_state.events_manager.apply_event(delete_event)

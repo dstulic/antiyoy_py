@@ -4,7 +4,7 @@ Tree Manager - handles tree spawning, grave processing, and lonely city conversi
 
 from typing import TYPE_CHECKING
 import random
-from core.events import IEventListener, AbstractEvent, EventType, EventPieceDelete, EventPieceAdd, EventSubtractMoney
+from core.events import IEventListener, AbstractEvent, EventType, EventPieceDelete, EventPieceAdd, EventSubtractMoney, SYSTEM_AUTHOR
 from core.enums import PieceType, HColor
 from core.rng_utils import get_deterministic_seed
 
@@ -30,11 +30,8 @@ class TreeManager(IEventListener):
         self.game_state = game_state
         self.temp_hex_list: list["Hex"] = []  # For tree breeding
         
-        # Initialize RNG with deterministic seed from original level code
-        seed = 0  # Default fallback
-        if game_state and hasattr(game_state, '_original_level_code') and game_state._original_level_code:
-            seed = get_deterministic_seed(game_state._original_level_code)
-        
+        # Initialize RNG from game state's original level code (always set on GameState)
+        seed = get_deterministic_seed(game_state._original_level_code)
         self.random = random.Random(seed)
         
         # If RNG state is already set (from save/load), restore it
@@ -133,7 +130,7 @@ class TreeManager(IEventListener):
         """
         # Delete existing piece if any
         if hex.has_piece():
-            delete_event = self.game_state.events_manager.factory.create_event(EventType.PIECE_DELETE)
+            delete_event = self.game_state.events_manager.factory.create_event(EventType.PIECE_DELETE, author=SYSTEM_AUTHOR)
             if isinstance(delete_event, EventPieceDelete):
                 delete_event.set_hex(hex)
                 self.game_state.events_manager.apply_event(delete_event)
@@ -178,7 +175,7 @@ class TreeManager(IEventListener):
             return
         
         # Subtract 1 money (burial cost)
-        subtract_event = self.game_state.events_manager.factory.create_event(EventType.SUBTRACT_MONEY)
+        subtract_event = self.game_state.events_manager.factory.create_event(EventType.SUBTRACT_MONEY, author=SYSTEM_AUTHOR)
         if isinstance(subtract_event, EventSubtractMoney):
             subtract_event.province_id = province.get_id()
             subtract_event.amount = 1
@@ -200,7 +197,7 @@ class TreeManager(IEventListener):
             piece_type = PieceType.PALM
         
         # Add tree piece
-        add_event = self.game_state.events_manager.factory.create_event(EventType.PIECE_ADD)
+        add_event = self.game_state.events_manager.factory.create_event(EventType.PIECE_ADD, author=SYSTEM_AUTHOR)
         if isinstance(add_event, EventPieceAdd):
             add_event.set_hex(hex)
             add_event.set_piece_type(piece_type)

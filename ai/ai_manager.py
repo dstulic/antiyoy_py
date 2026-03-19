@@ -4,11 +4,6 @@ from typing import Optional
 from core.game_state import GameState
 from core.enums import EntityType, RulesType
 from ai.balancer_ai import AiBalancerDefaultV1
-try:
-    from ai.random_ai import AiRandom
-except ImportError:
-    # AiRandom not implemented yet
-    AiRandom = None
 
 
 class AIManager:
@@ -25,7 +20,6 @@ class AIManager:
         self.active = True
 
         # Create AI instances
-        self.ai_random = None
         self.ai_balancer_default: Optional[AiBalancerDefaultV1] = None
 
         # Create AIs
@@ -33,8 +27,6 @@ class AIManager:
     
     def create_ais(self) -> None:
         """Create AI instances."""
-        if AiRandom:
-            self.ai_random = AiRandom(self.game_state)
         self.ai_balancer_default = AiBalancerDefaultV1(self.game_state)
     
     def get_ai_for_entity(self, entity) -> Optional:
@@ -50,9 +42,7 @@ class AIManager:
         if not entity or not entity.is_artificial_intelligence():
             return None
         
-        if entity.type == EntityType.AI_RANDOM:
-            return self.ai_random
-        elif entity.type == EntityType.AI_BALANCER:
+        if entity.type == EntityType.AI_BALANCER:
             return self.get_balancer_ai()
         
         return None
@@ -114,14 +104,16 @@ class AIManager:
         """
         if not self.active:
             return
-        
-        max_iterations = 100  # Prevent infinite loops
-        iterations = 0
-        game_end_manager = getattr(self.game_state, 'game_end_manager', None)
 
+        n_entities = len(self.game_state.entities_manager.entities)
+        hex_count = len(self.game_state.hexes)
+        max_ai_laps = hex_count * 10
+        max_iterations = max_ai_laps * n_entities
+        iterations = 0
+        
         while iterations < max_iterations:
             # Stop as soon as the game is over (someone won: 80% or all opponents dead)
-            if game_end_manager and game_end_manager.is_game_ended():
+            if self.game_state.game_end_manager.is_game_ended():
                 break
 
             current_entity = self.game_state.entities_manager.get_current_entity()
@@ -138,12 +130,14 @@ class AIManager:
                 if not processed:
                     break
                 # After AI turn, game may have ended (e.g. reached 80%); stop immediately
-                if game_end_manager and game_end_manager.is_game_ended():
+                if self.game_state.game_end_manager.is_game_ended():
                     break
             else:
                 break
 
             iterations += 1
+        if iterations >= max_iterations:
+            print(f"Warning: AI max turns limit reached ({max_iterations}).")
 
     def set_active(self, active: bool) -> None:
         """Set whether AI manager is active."""

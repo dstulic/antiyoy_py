@@ -87,7 +87,6 @@ class TestEntityType:
         expected_types = {
             "human",
             "net_entity",
-            "ai_random",
             "ai_balancer",
             "spectator",
             "dead_by_default",
@@ -106,7 +105,6 @@ class TestEntityType:
 
     def test_is_ai_method(self):
         """Test is_ai() method."""
-        assert EntityType.AI_RANDOM.is_ai() is True
         assert EntityType.AI_BALANCER.is_ai() is True
         assert EntityType.AI_EASY.is_ai() is True
         assert EntityType.AI_AVERAGE.is_ai() is True
@@ -127,6 +125,9 @@ class TestEventType:
             "unit_move",
             "piece_delete",
             "turn_end",
+            "turn_begin",
+            "lap_begin",
+            "player_turn_stats",
             "hex_change_color",
             "set_money",
             "piece_build",

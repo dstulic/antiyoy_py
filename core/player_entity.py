@@ -168,9 +168,10 @@ class TurnsManager(IEventListener):
                 self.turn_index += 1
             return
         
-        max_attempts = 100  # Prevent infinite loop
+        n_entities = len(self.core_model.entities_manager.entities)
+        max_attempts = n_entities  # At most one full lap to find an alive player
         attempts = 0
-        
+
         while attempts < max_attempts:
             if self.is_turn_index_in_end_of_lap():
                 self.turn_index = 0

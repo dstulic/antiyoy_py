@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Replay - Antiyoy</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/main.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/game.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/replay.css') }}">
+</head>
+<body>
+    <div class="replay-container">
+        <!-- Replay control bar -->
+        <div class="replay-control-bar">
+            <div class="replay-control-left">
+                <button class="replay-btn replay-home-btn" onclick="window.location.href='/'" title="Main menu">⌂</button>
+            </div>
+            <div class="replay-control-center">
+                <button class="replay-btn replay-seek-btn" id="btnBegin" title="Go to beginning">|<</button>
+                <button class="replay-btn replay-seek-btn" id="btnBack" title="Go one event back" disabled><<</button>
+                <button class="replay-btn replay-seek-btn" id="btnPause" title="Pause" disabled>||</button>
+                <input type="range" id="speedSlider" class="replay-speed-slider" min="1" max="100" value="50" orient="vertical" title="Playback speed">
+                <button class="replay-btn replay-seek-btn" id="btnPlay" title="Play">></button>
+                <button class="replay-btn replay-seek-btn" id="btnFwd" title="Go one event forward" disabled>>></button>
+                <button class="replay-btn replay-seek-btn" id="btnEnd" title="Go to end">>|</button>
+            </div>
+            <div class="replay-control-right">
+                <input type="range" id="replayScrubber" class="replay-scrubber" min="0" max="0" value="0" title="Scrub through replay">
+            </div>
+        </div>
+
+        <!-- Game board area with status overlay -->
+        <div class="replay-board-wrap">
+            <!-- Status view (collapsible) -->
+            <div class="replay-status-overlay" id="replayStatusOverlay">
+                <button class="replay-status-toggle" id="replayStatusToggle" title="Hide/Show">◀</button>
+                <div class="replay-status-content" id="replayStatusContent">
+                    <div class="replay-status-turn" id="replayTurnCounter">Turn: 0</div>
+                    <table class="replay-status-table">
+                        <thead>
+                            <tr><th>Type</th><th>Hex %</th><th>Money</th><th>Income</th></tr>
+                        </thead>
+                        <tbody id="replayStatusTableBody">
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="replay-board" id="replayBoard">
+                <div class="game-loading" id="replayLoading">Loading replay...</div>
+            </div>
+        </div>
+    </div>
+    <script src="{{ url_for('static', filename='js/hex_grid.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/animations.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/replay.js') }}"></script>
+</body>
+</html>

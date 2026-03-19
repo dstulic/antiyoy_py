@@ -10,7 +10,7 @@ from core.tree_manager import TreeManager
 from core.province import Province
 from core.hex import Hex
 from core.enums import HColor, PieceType, EventType, EntityType
-from core.events import EventTurnEnd, EventsManager, EventsFactory
+from core.events import EventTurnEnd, EventsManager, EventsFactory, SYSTEM_AUTHOR
 from typing import Optional
 
 
@@ -141,6 +141,7 @@ class MockGameState:
         # Create events manager
         self.events_manager = EventsManager(self)
         self.events_manager.factory = EventsFactory(self.events_manager)
+        self._original_level_code = "asdf"  # Required for TreeManager RNG
         # Create game end manager (real one, but it won't mark games as ended for single-player scenarios)
         from core.game_end_manager import GameEndManager
         self.game_end_manager = GameEndManager(self)
@@ -197,7 +198,7 @@ class TestTreeManager:
         # Apply turn end event (switches from red to blue)
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # Verify grave was converted to a tree (palm by default)
         # Blue is now current, so blue graves are processed
@@ -239,7 +240,7 @@ class TestTreeManager:
         # Apply turn end event (switches from red to blue)
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # Verify grave was converted to pine (6 adjacent hexes)
         # Blue is now current, so blue graves are processed
@@ -280,7 +281,7 @@ class TestTreeManager:
         # Apply turn end event (switches from red to blue)
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # Verify grave was converted to palm (fewer than 6 adjacent hexes)
         # Blue is now current, so blue graves are processed
@@ -320,7 +321,7 @@ class TestTreeManager:
         # Apply turn end event (switches from red to blue)
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # Verify blue grave was converted (blue is now current)
         assert blue_hex.piece in (PieceType.PALM, PieceType.PINE)
@@ -359,7 +360,7 @@ class TestTreeManager:
         # Apply turn end event (switches from blue back to red)
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # Verify grave was converted to tree (red is now current)
         assert hex1.piece in (PieceType.PALM, PieceType.PINE)
@@ -395,7 +396,7 @@ class TestTreeManager:
         # Apply turn end event (switches from red to blue)
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # Verify grave was converted to tree (blue is now current)
         assert hex1.piece in (PieceType.PALM, PieceType.PINE)
@@ -431,7 +432,7 @@ class TestTreeManager:
         # Apply turn end event (switches from blue back to red)
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # Verify grave was converted to tree (red is now current)
         assert hex1.piece in (PieceType.PALM, PieceType.PINE)
@@ -463,7 +464,7 @@ class TestTreeManager:
         # Apply turn end event (switches from red to blue)
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # Verify grave was converted to tree (blue is now current)
         assert hex1.piece in (PieceType.PALM, PieceType.PINE)
@@ -494,7 +495,7 @@ class TestTreeManager:
         # Apply turn end event
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # Verify lonely city was converted to tree
         assert hex1.piece in (PieceType.PALM, PieceType.PINE)
@@ -526,7 +527,7 @@ class TestTreeManager:
         # Apply turn end event
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # Verify city was NOT converted (it's in a province)
         assert hex1.piece == PieceType.CITY
@@ -555,7 +556,7 @@ class TestTreeManager:
         # Apply turn end event
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # Verify gray city was NOT converted
         assert hex1.piece == PieceType.CITY
@@ -584,7 +585,7 @@ class TestTreeManager:
         # Apply turn end event
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # Verify unit was NOT converted (only cities are converted)
         assert hex1.piece == PieceType.PEASANT
@@ -618,7 +619,7 @@ class TestTreeManager:
         # Apply turn end event
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # Verify all lonely cities were converted (regardless of color)
         assert red_hex.piece in (PieceType.PALM, PieceType.PINE)
@@ -655,7 +656,7 @@ class TestTreeManager:
         # Apply turn end event
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # Verify lonely city was converted to pine (6 adjacent hexes)
         assert hex1.piece == PieceType.PINE
@@ -689,7 +690,7 @@ class TestTreeManager:
         # Apply turn end event
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # Verify lonely city was converted to tree
         assert hex1.piece in (PieceType.PALM, PieceType.PINE)

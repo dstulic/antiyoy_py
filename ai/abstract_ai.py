@@ -1,7 +1,6 @@
 """Abstract base class for AI players."""
 
 from abc import ABC, abstractmethod
-import random
 from typing import Optional
 from core.game_state import GameState
 from core.enums import Difficulty, HColor, PieceType
@@ -18,7 +17,6 @@ class AbstractAI(ABC):
             game_state: The game state this AI operates on
         """
         self.game_state = game_state
-        self.random = random.Random()
         self.difficulty: Optional[Difficulty] = None
         self.temp_list: list = []  # Temporary list for operations
 

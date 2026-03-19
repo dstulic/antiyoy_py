@@ -102,6 +102,23 @@ class AnimationSystem {
         this.playSound('ding');
     }
     
+    // Add piece build animation (piece appears at target hex)
+    addPieceBuildAnimation(x, y, pieceType, isVisible = true) {
+        if (!isVisible) return;
+        const animation = {
+            type: 'piece_build',
+            x: x,
+            y: y,
+            startTime: Date.now(),
+            duration: 350,
+            pieceType: pieceType,
+            scale: 0,
+            opacity: 0
+        };
+        this.animations.push(animation);
+        this.playSound('ding');
+    }
+
     // Add unit movement animation
     addUnitMoveAnimation(startX, startY, endX, endY, pieceType, startHexCoord, endHexCoord, isVisible = true, isCombat = false) {
         if (!isVisible) {
@@ -198,15 +215,30 @@ class AnimationSystem {
                 const easeProgress = this.easeInOutQuad(progress);
                 anim.currentX = anim.startX + (anim.endX - anim.startX) * easeProgress;
                 anim.currentY = anim.startY + (anim.endY - anim.startY) * easeProgress;
+            } else if (anim.type === 'piece_build') {
+                if (progress >= 1.0) {
+                    anim.completed = true;
+                    anim.scale = 1;
+                    anim.opacity = 1;
+                    continue;
+                }
+                const easeProgress = this.easeOutBack(progress);
+                anim.scale = easeProgress;
+                anim.opacity = easeProgress;
             }
         }
     }
+
+    easeOutBack(t) {
+        const c1 = 1.70158, c3 = c1 + 1;
+        return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+    }
     
-    // Remove completed unit move animations (called after state reload)
+    // Remove completed animations (called after state reload)
     clearCompletedAnimations() {
         for (let i = this.animations.length - 1; i >= 0; i--) {
             const anim = this.animations[i];
-            if (anim.type === 'unit_move' && anim.completed) {
+            if ((anim.type === 'unit_move' || anim.type === 'piece_build') && anim.completed) {
                 this.animations.splice(i, 1);
             }
         }
@@ -233,6 +265,9 @@ class AnimationSystem {
                 // Draw unit at current animation position
                 this.ctx.globalAlpha = anim.opacity;
                 gameBoard.drawPiece(anim.currentX, anim.currentY, anim.pieceType, anim.opacity);
+            } else if (anim.type === 'piece_build') {
+                this.ctx.globalAlpha = anim.opacity !== undefined ? anim.opacity : 1;
+                gameBoard.drawPiece(anim.x, anim.y, anim.pieceType, anim.opacity !== undefined ? anim.opacity : 1, anim.scale);
             }
             
             this.ctx.restore();

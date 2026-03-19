@@ -10,12 +10,11 @@ from save_load.format import (
     SECTION_PROVINCES,
     SECTION_RULES,
     SECTION_TURN,
-    SECTION_DIPLOMACY,
-    SECTION_MAIL_BASKET,
     SECTION_FOG,
     SECTION_CORE_INIT,
     SECTION_RNG_STATE,
     SECTION_EVENTS_LIST,
+    SECTION_ORIGINAL_LEVEL_CODE,
 )
 from core.game_state import GameState
 from core.enums import HColor, PieceType, RulesType, EntityType
@@ -73,15 +72,26 @@ class GameStateDecoder:
         """
         if not level_code or len(level_code) < 3:
             return None, -1
-        
-        # Create new game state
-        game_state = GameState()
+
+        # Determine original level code: saved games have it in a section; levels do not
+        if has_section(level_code, SECTION_ORIGINAL_LEVEL_CODE):
+            import base64
+            source = get_section(level_code, SECTION_ORIGINAL_LEVEL_CODE)
+            if source:
+                try:
+                    original_level_code = base64.b64decode(source).decode("utf-8")
+                except Exception:
+                    original_level_code = level_code
+            else:
+                original_level_code = level_code
+        else:
+            original_level_code = level_code
+
+        # Create new game state (pass original level code so TreeManager gets deterministic seed)
+        game_state = GameState(original_level_code=original_level_code)
         campaign_level_index = -1
         
         try:
-            # Store original level code for deterministic seed generation
-            game_state._original_level_code = level_code
-            
             # Decode campaign level index first
             campaign_level_index = self._decode_campaign_level_index(level_code)
             
@@ -94,23 +104,15 @@ class GameStateDecoder:
             self._decode_ready(game_state, level_code)
             self._decode_rules(game_state, level_code)
             self._decode_turn(game_state, level_code)
-            # Optional sections
-            self._decode_mail_basket(game_state, level_code)
+            # Optional sections (client_init, camera, diplomacy, mail_basket, etc. are skipped)
             self._decode_fog(game_state, level_code)
             self._decode_rng_state(game_state, level_code)
             self._decode_events_list(game_state, level_code)
-            
-            # Reinitialize TreeManager RNG with correct seed or restore saved state
-            if hasattr(game_state, 'tree_manager') and game_state.tree_manager:
-                if game_state._rng_state:
-                    # Restore saved RNG state
-                    game_state.tree_manager.random.setstate(game_state._rng_state)
-                else:
-                    # Reinitialize with deterministic seed from original level code
-                    from core.rng_utils import get_deterministic_seed
-                    import random
-                    seed = get_deterministic_seed(game_state._original_level_code)
-                    game_state.tree_manager.random = random.Random(seed)
+            self._decode_replay_snapshots(game_state, level_code)
+
+            # Restore saved RNG state if present; otherwise TreeManager already has correct seed from level code
+            if hasattr(game_state, 'tree_manager') and game_state.tree_manager and game_state._rng_state:
+                game_state.tree_manager.random.setstate(game_state._rng_state)
             
             return game_state, campaign_level_index
         except Exception as e:
@@ -196,7 +198,6 @@ class GameStateDecoder:
         _build_adjacency_graph(game_state)
         
         # Now set colors and pieces
-        events_factory = game_state.events_manager.factory
         for hex_info in hex_data:
             hex = game_state.get_hex(hex_info["c1"], hex_info["c2"])
             if not hex:
@@ -209,20 +210,15 @@ class GameStateDecoder:
             except (ValueError, KeyError):
                 continue
             
-            # Add piece if present
+            # Add piece if present (set directly so clone state has units for replay/next events)
             if hex_info["piece"]:
                 try:
                     piece_type = PieceType(hex_info["piece"])
                     unit_id = hex_info["unit_id"] if hex_info["unit_id"] is not None else -1
                     if unit_id == -1:
                         unit_id = game_state.get_id_for_new_unit()
-                    from core.events import EventPieceAdd, EventType
-                    event = events_factory.create_event(EventType.PIECE_ADD)
-                    if isinstance(event, EventPieceAdd):
-                        event.set_hex(hex)
-                        event.set_piece_type(piece_type)
-                        event.set_unit_id(unit_id)
-                        game_state.events_manager.apply_event(event)
+                    hex.set_piece(piece_type)
+                    hex.set_unit_id(unit_id)
                 except (ValueError, KeyError):
                     continue
 
@@ -343,11 +339,6 @@ class GameStateDecoder:
             return
         game_state.turns_manager.decode(source)
 
-    def _decode_mail_basket(self, game_state: GameState, level_code: str) -> None:
-        """Decode mail basket section."""
-        # Placeholder - letters manager not yet implemented
-        pass
-
     def _decode_fog(self, game_state: GameState, level_code: str) -> None:
         """Decode fog of war section."""
         source = get_section(level_code, SECTION_FOG)
@@ -453,6 +444,26 @@ class GameStateDecoder:
             # Add to events list (completed turns, since we're loading a saved game)
             game_state.history_manager.events_list.append(history_event)
     
+    def _decode_replay_snapshots(self, game_state: GameState, level_code: str) -> None:
+        """Decode replay snapshots section (base64-encoded newline-separated snapshots)."""
+        from save_load.format import get_section, SECTION_REPLAY_SNAPSHOTS
+        from core.history_manager import ReplaySnapshot
+        import base64
+
+        source = get_section(level_code, SECTION_REPLAY_SNAPSHOTS)
+        if not source or source == "-":
+            return
+        try:
+            raw = base64.b64decode(source.strip()).decode("utf-8")
+        except Exception:
+            return
+        for line in raw.split("\n"):
+            if not line.strip():
+                continue
+            snap = ReplaySnapshot.decode(line)
+            if snap:
+                game_state.history_manager.replay_snapshots.append(snap)
+
     def _restore_single_event(self, event: AbstractEvent, event_data: str, game_state: GameState) -> None:
         """Restore a single event from its data string."""
         from core.events import EventType
@@ -465,10 +476,37 @@ class GameStateDecoder:
             from core.events import EventTurnEnd
             if isinstance(event, EventTurnEnd) and len(parts) >= 2:
                 try:
-                    time = int(parts[0]) if parts[0] else 0
-                    current_color = None if parts[1] == "null" else HColor(parts[1])
+                    time = int(parts[0]) if parts[0] and parts[0] != "-" else 0
+                    current_color = None if (len(parts) < 2 or not parts[1] or parts[1] == "null") else HColor(parts[1])
                     event.set_target_end_time(time)
                     event.set_current_color(current_color)
+                    if len(parts) >= 4 and parts[2] != "-" and parts[3] != "-":
+                        event.set_turn_index_lap_after(int(parts[2]), int(parts[3]))
+                except (ValueError, KeyError):
+                    pass
+        elif event_type == EventType.TURN_BEGIN:
+            from core.events import EventTurnBegin
+            if isinstance(event, EventTurnBegin) and len(parts) >= 3:
+                try:
+                    event.set_turn_index(int(parts[0]))
+                    event.set_lap(int(parts[1]))
+                    event.set_color(HColor(parts[2]))
+                except (ValueError, KeyError):
+                    pass
+        elif event_type == EventType.LAP_BEGIN:
+            from core.events import EventLapBegin
+            if isinstance(event, EventLapBegin) and len(parts) >= 1:
+                try:
+                    event.set_lap(int(parts[0]))
+                except (ValueError, KeyError):
+                    pass
+        elif event_type == EventType.PLAYER_TURN_STATS:
+            from core.events import EventPlayerTurnStats
+            if isinstance(event, EventPlayerTurnStats) and len(parts) >= 3:
+                try:
+                    event.set_color(HColor(parts[0]))
+                    event.set_total_money(int(parts[1]))
+                    event.set_total_income(int(parts[2]))
                 except (ValueError, KeyError):
                     pass
         elif event_type == EventType.UNIT_MOVE:
@@ -484,6 +522,8 @@ class GameStateDecoder:
                     if hex1 and hex2:
                         event.set_start(hex1)
                         event.set_finish(hex2)
+                        if len(parts) >= 5:
+                            event.set_color_transfer_enabled(parts[4] == "1")
                 except (ValueError, KeyError):
                     pass
         elif event_type == EventType.PIECE_ADD:

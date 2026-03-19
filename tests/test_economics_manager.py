@@ -11,7 +11,7 @@ from core.economics_manager import EconomicsManager
 from core.province import Province
 from core.hex import Hex
 from core.enums import HColor, PieceType, EventType, EntityType
-from core.events import EventTurnEnd, EventsManager, EventsFactory
+from core.events import EventTurnEnd, EventsManager, EventsFactory, SYSTEM_AUTHOR
 from typing import Optional
 
 
@@ -961,7 +961,7 @@ class TestEconomicsManager:
         # Apply turn end event (switches from red to blue)
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # Verify money was updated (blue is now current, so blue gets profit)
         new_money = province.get_money()
@@ -993,7 +993,7 @@ class TestEconomicsManager:
         # Apply turn end event
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # Verify money was NOT updated (still 100)
         assert province.get_money() == initial_money
@@ -1031,7 +1031,7 @@ class TestEconomicsManager:
         # Apply turn end event (switches from red to blue)
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # After turn switch, blue is now current, so blue gets profit
         # Blue province: 5 income - 0 consumption = 5 profit
@@ -1072,7 +1072,7 @@ class TestEconomicsManager:
         # Apply turn end event (switches from red to blue)
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # After turn switch, blue is now current, so both blue provinces get profit
         # Province1: 5 income - 0 consumption = 5 profit
@@ -1111,7 +1111,7 @@ class TestEconomicsManager:
         # Apply turn end event (switches from red to blue)
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # Verify money was reduced (blue is now current, so blue gets profit applied)
         assert province.get_money() == 100 + (-35)  # 65
@@ -1147,7 +1147,7 @@ class TestEconomicsManager:
         # Apply turn end event (this will switch to blue)
         event = EventTurnEnd()
         event.set_core_model(game_state)
-        game_state.events_manager.apply_event(event)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
         
         # After turn switch, blue is now current (matching original game's isOwnedByCurrentEntity logic)
         # So blue province should get profit applied

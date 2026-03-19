@@ -1,11 +1,10 @@
 """Encoder for save game format."""
 
+import base64
 from typing import Optional
 from save_load.format import (
     start_section,
     SECTION_TITLE,
-    SECTION_CLIENT_INIT,
-    SECTION_CAMERA,
     SECTION_CORE_INIT,
     SECTION_HEXES,
     SECTION_CORE_CURRENT_IDS,
@@ -14,16 +13,13 @@ from save_load.format import (
     SECTION_READY,
     SECTION_RULES,
     SECTION_TURN,
-    SECTION_DIPLOMACY,
-    SECTION_MAIL_BASKET,
     SECTION_FOG,
-    SECTION_STARTING_HEXES,
     SECTION_EVENTS_LIST,
-    SECTION_STARTING_PROVINCES,
-    SECTION_EDITOR,
     SECTION_CAMPAIGN,
     SECTION_PAUSE_NAME,
     SECTION_RNG_STATE,
+    SECTION_REPLAY_SNAPSHOTS,
+    SECTION_ORIGINAL_LEVEL_CODE,
 )
 from core.game_state import GameState
 
@@ -38,39 +34,25 @@ class GameStateEncoder:
     def encode(
         self,
         game_state: GameState,
-        client_init: Optional[str] = None,
-        camera: Optional[str] = None,
         campaign_level_index: int = -1,
         pause_name: Optional[str] = None,
     ) -> str:
         """
         Encode a game state to level code string.
-        
+
         Args:
             game_state: The GameState to encode
-            client_init: Optional client initialization data (e.g., "small,-1")
-            camera: Optional camera position (e.g., "0.65 1.04 1.0")
             campaign_level_index: Campaign level index (-1 if not a campaign)
             pause_name: Optional pause name
-            
+
         Returns:
             Level code string
         """
         builder = []
-        
+
         # Title
         builder.append(SECTION_TITLE)
-        
-        # Client initialization
-        if client_init:
-            builder.append(start_section(SECTION_CLIENT_INIT))
-            builder.append(client_init)
-        
-        # Camera position
-        if camera:
-            builder.append(start_section(SECTION_CAMERA))
-            builder.append(camera)
-        
+
         # Core initialization
         builder.append(start_section(SECTION_CORE_INIT))
         builder.append(game_state.encode_initialization())
@@ -102,26 +84,14 @@ class GameStateEncoder:
         # Turn
         builder.append(start_section(SECTION_TURN))
         builder.append(game_state.turns_manager.encode())
-        
-        # Diplomacy (placeholder)
-        builder.append(start_section(SECTION_DIPLOMACY))
-        builder.append("off")  # Placeholder
-        
-        # Mail basket (placeholder)
-        builder.append(start_section(SECTION_MAIL_BASKET))
-        builder.append("0,")  # Placeholder
-        
-        # Fog of war (placeholder)
+
+        # Fog of war
         builder.append(start_section(SECTION_FOG))
         if game_state.fog_of_war_manager and hasattr(game_state.fog_of_war_manager, "enabled"):
             builder.append("true" if game_state.fog_of_war_manager.enabled else "false")
         else:
             builder.append("false")
-        
-        # Starting hexes (history - placeholder for now)
-        # builder.append(start_section(SECTION_STARTING_HEXES))
-        # builder.append("")  # Would need starting position snapshot
-        
+
         # Events list (history)
         if hasattr(game_state, 'history_manager') and game_state.history_manager:
             builder.append(start_section(SECTION_EVENTS_LIST))
@@ -129,15 +99,15 @@ class GameStateEncoder:
         else:
             builder.append(start_section(SECTION_EVENTS_LIST))
             builder.append("")  # Empty if no history manager
-        
-        # Starting provinces (history - placeholder for now)
-        # builder.append(start_section(SECTION_STARTING_PROVINCES))
-        # builder.append("")  # Would need starting position snapshot
-        
-        # Editor (placeholder)
-        # builder.append(start_section(SECTION_EDITOR))
-        # builder.append("")  # Would need editor manager
-        
+
+        # Replay snapshots (hex state at each step for perfect replay)
+        if hasattr(game_state, 'history_manager') and game_state.history_manager and game_state.history_manager.replay_snapshots:
+            import base64 as b64mod
+            raw = game_state.history_manager.encode_snapshots()
+            encoded = b64mod.b64encode(raw.encode("utf-8")).decode("ascii")
+            builder.append(start_section(SECTION_REPLAY_SNAPSHOTS))
+            builder.append(encoded)
+
         # Campaign
         if campaign_level_index != -1:
             builder.append(start_section(SECTION_CAMPAIGN))
@@ -152,7 +122,6 @@ class GameStateEncoder:
         rng_state = game_state.get_rng_state()
         if rng_state:
             import pickle
-            import base64
             # Pickle the RNG state tuple to bytes
             rng_state_bytes = pickle.dumps(rng_state)
             # Encode to base64 string for safe storage in level code
@@ -163,6 +132,13 @@ class GameStateEncoder:
             # If no RNG state, store placeholder
             builder.append(start_section(SECTION_RNG_STATE))
             builder.append("-")
+
+        # Original level code (so loaded save restores the level we started from)
+        original_b64 = base64.b64encode(
+            game_state._original_level_code.encode("utf-8")
+        ).decode("ascii")
+        builder.append(start_section(SECTION_ORIGINAL_LEVEL_CODE))
+        builder.append(original_b64)
         
         # End with #
         builder.append("#")

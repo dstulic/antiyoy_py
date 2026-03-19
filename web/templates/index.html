@@ -19,6 +19,9 @@
                 <button class="menu-button load-button" onclick="showLoadGameDialog()">
                     Load Game
                 </button>
+                <button class="menu-button replay-button" onclick="showReplayDialog()">
+                    Replay
+                </button>
             </div>
             
             <!-- Load Game Dialog -->
@@ -31,6 +34,21 @@
                     <div class="dialog-body">
                         <div id="savesList" class="saves-list">
                             <p>Loading saves...</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Replay Dialog (spacious) -->
+            <div id="replayDialog" class="dialog-overlay replay-dialog-overlay" style="display: none;">
+                <div class="dialog-content replay-dialog-content">
+                    <div class="dialog-header">
+                        <h2>Select Replay</h2>
+                        <button class="dialog-close" onclick="hideReplayDialog()">×</button>
+                    </div>
+                    <div class="dialog-body replay-dialog-body">
+                        <div id="replaysList" class="replays-list">
+                            <p>Loading replays...</p>
                         </div>
                     </div>
                 </div>
@@ -131,9 +149,43 @@
                 
                 // Close dialog when clicking outside
                 document.getElementById('loadGameDialog').addEventListener('click', function(e) {
-                    if (e.target === this) {
-                        hideLoadGameDialog();
-                    }
+                    if (e.target === this) hideLoadGameDialog();
+                });
+
+                function showReplayDialog() {
+                    document.getElementById('replayDialog').style.display = 'flex';
+                    loadReplaysList();
+                }
+                function hideReplayDialog() {
+                    document.getElementById('replayDialog').style.display = 'none';
+                }
+                function loadReplaysList() {
+                    fetch('/api/replays/list')
+                        .then(r => r.json())
+                        .then(data => {
+                            const listEl = document.getElementById('replaysList');
+                            if (data.success && data.replays && data.replays.length > 0) {
+                                listEl.innerHTML = '';
+                                data.replays.forEach(r => {
+                                    const item = document.createElement('div');
+                                    item.className = 'replay-item';
+                                    const pathEsc = r.path.replace(/"/g, '&quot;');
+                                    item.innerHTML = '<div class="replay-info"><div class="replay-name">' + r.name + '</div><div class="replay-path">' + pathEsc + '</div></div><button class="replay-open-btn" data-path="' + pathEsc + '">Open</button>';
+                                    item.querySelector('.replay-open-btn').onclick = () => openReplay(r.path);
+                                    listEl.appendChild(item);
+                                });
+                            } else {
+                                listEl.innerHTML = '<p class="replay-empty">No replays found.</p>';
+                            }
+                        })
+                        .catch(() => { document.getElementById('replaysList').innerHTML = '<p class="replay-error">Error loading replays.</p>'; });
+                }
+                function openReplay(path) {
+                    hideReplayDialog();
+                    window.location.href = '/replay?path=' + encodeURIComponent(path);
+                }
+                document.getElementById('replayDialog').addEventListener('click', function(e) {
+                    if (e.target === this) hideReplayDialog();
                 });
             </script>
         </div>

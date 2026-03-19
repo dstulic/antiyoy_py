@@ -104,7 +104,7 @@ pytest tests/ --cov=core --cov=save_load --cov=players --cov=commands --cov=visi
 - `players/` - Player interfaces (base player, ML player, human player)
 - `commands/` - Command system (types, validator, executor)
 - `visibility/` - State view and fog-of-war filtering
-- `ai/` - AI players (random, balancer variants)
+- `ai/` - AI players (balancer variants)
 - `tests/` - Unit tests
 
 

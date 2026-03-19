@@ -136,13 +136,16 @@ class MockEventFactory:
     def __init__(self, game_state=None):
         self.game_state = game_state
     
-    def create_event(self, event_type):
+    def create_event(self, event_type, author=None):
+        """Create event; author is accepted for compatibility with real EventsFactory."""
         from core.events import EventPieceBuild
         from core.enums import EventType
         if event_type == EventType.PIECE_BUILD or (hasattr(event_type, 'value') and event_type.value == "piece_build"):
             event = EventPieceBuild()
             if self.game_state:
                 event.core_model = self.game_state
+            if author is not None and hasattr(event, 'set_author'):
+                event.set_author(author)
             return event
         return None
 
