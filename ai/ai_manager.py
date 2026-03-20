@@ -6,6 +6,10 @@ from core.enums import EntityType, RulesType
 from ai.balancer_ai import AiBalancerDefaultV1
 
 
+# Default path for the ML model; override via AIManager.set_ml_model_path().
+_DEFAULT_ML_MODEL_PATH = "ml_models/best/best_model"
+
+
 class AIManager:
     """Manages AI players and their decision making. Each entity's difficulty is set on the entity (ai_difficulty)."""
 
@@ -21,6 +25,8 @@ class AIManager:
 
         # Create AI instances
         self.ai_balancer_default: Optional[AiBalancerDefaultV1] = None
+        self._ml_ai = None
+        self._ml_model_path: str = _DEFAULT_ML_MODEL_PATH
 
         # Create AIs
         self.create_ais()
@@ -28,6 +34,18 @@ class AIManager:
     def create_ais(self) -> None:
         """Create AI instances."""
         self.ai_balancer_default = AiBalancerDefaultV1(self.game_state)
+
+    def set_ml_model_path(self, path: str) -> None:
+        """Set the path to the ML model and reset the lazy-loaded instance."""
+        self._ml_model_path = path
+        self._ml_ai = None
+
+    def _get_ml_ai(self):
+        """Lazy-load the ML AI so the import cost is only paid when needed."""
+        if self._ml_ai is None:
+            from ml.ml_ai import MlAI
+            self._ml_ai = MlAI(self.game_state, self._ml_model_path)
+        return self._ml_ai
     
     def get_ai_for_entity(self, entity) -> Optional:
         """
@@ -44,6 +62,9 @@ class AIManager:
         
         if entity.type == EntityType.AI_BALANCER:
             return self.get_balancer_ai()
+        
+        if entity.type == EntityType.AI_ML:
+            return self._get_ml_ai()
         
         return None
     

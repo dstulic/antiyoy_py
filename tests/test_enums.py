@@ -94,6 +94,7 @@ class TestEntityType:
             "ai_average",
             "ai_hard",
             "ai_expert",
+            "ai_ml",
         }
         actual_types = {entity_type.value for entity_type in EntityType}
         assert actual_types == expected_types

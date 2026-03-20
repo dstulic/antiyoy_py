@@ -61,6 +61,7 @@ class EntityType(Enum):
     AI_AVERAGE = "ai_average"
     AI_HARD = "ai_hard"
     AI_EXPERT = "ai_expert"
+    AI_ML = "ai_ml"
 
     def __str__(self) -> str:
         """Return string representation."""
@@ -74,6 +75,7 @@ class EntityType(Enum):
             EntityType.AI_AVERAGE,
             EntityType.AI_HARD,
             EntityType.AI_EXPERT,
+            EntityType.AI_ML,
         )
 
 

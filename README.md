@@ -96,6 +96,52 @@ pytest tests/ --cov=core --cov=save_load --cov=players --cov=commands --cov=visi
 
 **Note:** The `tests/` path includes all tests, including visual tests in `tests/visual/`. Visual tests are automatically included when running the coverage command above.
 
+## ML Training
+
+Train a reinforcement learning agent to play Antiyoy using [Stable-Baselines3](https://stable-baselines3.readthedocs.io/) with action masking.
+
+### Quick Start
+
+```bash
+source .venv/bin/activate
+python -m ml.train
+```
+
+This trains a MaskablePPO agent on levels 0 and 1 for 1M timesteps with campaign-default opponent difficulty.
+
+### Options
+
+```bash
+python -m ml.train \
+    --algo MaskablePPO \      # MaskablePPO or MaskableA2C
+    --timesteps 1000000 \     # total environment steps
+    --levels 0 1 5 \          # specific levels to train on
+    --level-range 0 10 \      # or an inclusive range (overrides --levels)
+    --difficulty campaign \    # campaign (default) | easy | average | hard | expert | balancer
+    --n-envs 4 \              # parallel game environments
+    --lr 0.0003 \             # learning rate
+    --max-turns 500 \         # turns before episode truncation
+    --shaping-weight 0.1 \    # reward shaping weight for ownership changes
+    --log-dir ml_logs \       # evaluation logs
+    --model-dir ml_models     # checkpoint and final model output
+```
+
+`--difficulty campaign` (the default) automatically uses the level-appropriate difficulty from the campaign progression (Easy for levels 0-11, Average for 12-23, Hard for 24-59, etc.).
+
+### Monitoring
+
+Training logs are written to `ml_tb_logs/`. View them with TensorBoard:
+
+```bash
+tensorboard --logdir ml_tb_logs
+```
+
+### Output
+
+- Checkpoints: `ml_models/antiyoy_*.zip`
+- Best model (by evaluation reward): `ml_models/best/best_model.zip`
+- Final model: `ml_models/antiyoy_final.zip`
+
 ## Project Structure
 
 - `core/` - Core game logic (hexes, provinces, events, rulesets, game state)
@@ -105,6 +151,7 @@ pytest tests/ --cov=core --cov=save_load --cov=players --cov=commands --cov=visi
 - `commands/` - Command system (types, validator, executor)
 - `visibility/` - State view and fog-of-war filtering
 - `ai/` - AI players (balancer variants)
+- `ml/` - ML training and inference (Gymnasium env, observation encoder, action mapper, reward, training script)
 - `tests/` - Unit tests
 
 
