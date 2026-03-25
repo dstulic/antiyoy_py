@@ -1,5 +1,6 @@
 """Province management for the game."""
 
+from collections import deque
 from typing import Optional, List, Callable, Dict
 from core.hex import Hex
 from core.enums import HColor, PieceType
@@ -179,7 +180,7 @@ class WaveWorker:
         """Initialize wave worker with condition and action callbacks."""
         self.condition = condition
         self.action = action
-        self.propagation_list: List[Hex] = []
+        self.propagation_list: deque[Hex] = deque()
         self.start_hex: Optional[Hex] = None
 
     def apply(self, start_hex: Hex) -> None:
@@ -187,8 +188,8 @@ class WaveWorker:
         self.start_hex = start_hex
         self.propagation_list.clear()
         self._add_to_propagation_list(None, start_hex)
-        while len(self.propagation_list) > 0:
-            hex = self.propagation_list.pop(0)
+        while self.propagation_list:
+            hex = self.propagation_list.popleft()
             self._propagate(hex)
 
     def _propagate(self, hex: Hex) -> None:

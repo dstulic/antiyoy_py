@@ -81,6 +81,37 @@ class AbstractRuleset(ABC):
 class RulesetDefaultV1(AbstractRuleset):
     """Default ruleset version 1."""
 
+    _PRICE_MAP = {
+        PieceType.PEASANT: 10,
+        PieceType.SPEARMAN: 20,
+        PieceType.BARON: 30,
+        PieceType.KNIGHT: 40,
+        PieceType.TOWER: 15,
+        PieceType.STRONG_TOWER: 35,
+    }
+    _BUILDABLE = frozenset({
+        PieceType.PEASANT,
+        PieceType.SPEARMAN,
+        PieceType.BARON,
+        PieceType.KNIGHT,
+        PieceType.FARM,
+        PieceType.TOWER,
+        PieceType.STRONG_TOWER,
+    })
+    _CONSUMPTION_MAP = {
+        PieceType.PEASANT: 2,
+        PieceType.SPEARMAN: 6,
+        PieceType.BARON: 18,
+        PieceType.KNIGHT: 36,
+        PieceType.TOWER: 1,
+        PieceType.STRONG_TOWER: 6,
+    }
+    _DEFENSE_MAP = {
+        PieceType.CITY: 1,
+        PieceType.TOWER: 2,
+        PieceType.STRONG_TOWER: 3,
+    }
+
     def get_rules_type(self) -> RulesType:
         """Get ruleset type."""
         return RulesType.DEF
@@ -101,46 +132,21 @@ class RulesetDefaultV1(AbstractRuleset):
 
     def get_price(self, province: Province, piece_type: PieceType) -> int:
         """Get price for piece type."""
-        price_map = {
-            PieceType.PEASANT: 10,
-            PieceType.SPEARMAN: 20,
-            PieceType.BARON: 30,
-            PieceType.KNIGHT: 40,
-            PieceType.TOWER: 15,
-            PieceType.STRONG_TOWER: 35,
-        }
-        if piece_type in price_map:
-            return price_map[piece_type]
+        if piece_type in self._PRICE_MAP:
+            return self._PRICE_MAP[piece_type]
         if piece_type == PieceType.FARM:
             return 12 + 2 * province.count_pieces(PieceType.FARM)
         return 0
 
     def is_buildable(self, piece_type: PieceType) -> bool:
         """Check if buildable."""
-        buildable = {
-            PieceType.PEASANT,
-            PieceType.SPEARMAN,
-            PieceType.BARON,
-            PieceType.KNIGHT,
-            PieceType.FARM,
-            PieceType.TOWER,
-            PieceType.STRONG_TOWER,
-        }
-        return piece_type in buildable
+        return piece_type in self._BUILDABLE
 
     def get_consumption(self, piece_type: Optional[PieceType]) -> int:
         """Get consumption."""
         if piece_type is None:
             return 0
-        consumption_map = {
-            PieceType.PEASANT: 2,
-            PieceType.SPEARMAN: 6,
-            PieceType.BARON: 18,
-            PieceType.KNIGHT: 36,
-            PieceType.TOWER: 1,
-            PieceType.STRONG_TOWER: 6,
-        }
-        return consumption_map.get(piece_type, 0)
+        return self._CONSUMPTION_MAP.get(piece_type, 0)
 
     def get_defense_value(self, piece_type: Optional[PieceType]) -> int:
         """Get defense value."""
@@ -148,12 +154,7 @@ class RulesetDefaultV1(AbstractRuleset):
             return 0
         if is_unit(piece_type):
             return get_strength(piece_type)
-        defense_map = {
-            PieceType.CITY: 1,
-            PieceType.TOWER: 2,
-            PieceType.STRONG_TOWER: 3,
-        }
-        return defense_map.get(piece_type, 0)
+        return self._DEFENSE_MAP.get(piece_type, 0)
 
     def get_defense_value_hex(self, hex: Hex) -> int:
         """Get defense value for hex."""

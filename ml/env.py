@@ -233,6 +233,11 @@ class AntiyoyEnv(gymnasium.Env):
         gs = self.game_state
         from core.events import SYSTEM_AUTHOR
 
+        # Disable history/undo tracking -- pure observers that serialise
+        # the full game state on every event, ~50% of per-step cost.
+        gs.events_manager.remove_listener(gs.undo_manager)
+        gs.events_manager.remove_listener(gs.history_manager)
+
         # Starting money
         for province in gs.provinces_manager.provinces:
             if province.get_money() == 0:

@@ -2,41 +2,43 @@
 
 from core.enums import PieceType
 
+_UNIT_TYPES = frozenset({
+    PieceType.PEASANT,
+    PieceType.SPEARMAN,
+    PieceType.BARON,
+    PieceType.KNIGHT,
+})
+
+_STRENGTH_MAP = {
+    PieceType.PEASANT: 1,
+    PieceType.SPEARMAN: 2,
+    PieceType.BARON: 3,
+    PieceType.KNIGHT: 4,
+}
+
+_UNIT_BY_STRENGTH = {
+    1: PieceType.PEASANT,
+    2: PieceType.SPEARMAN,
+    3: PieceType.BARON,
+    4: PieceType.KNIGHT,
+}
+
 
 def is_unit(piece_type: PieceType | None) -> bool:
     """Check if a piece type is a unit."""
-    if piece_type is None:
-        return False
-    return piece_type in (
-        PieceType.PEASANT,
-        PieceType.SPEARMAN,
-        PieceType.BARON,
-        PieceType.KNIGHT,
-    )
+    return piece_type in _UNIT_TYPES
 
 
 def get_strength(piece_type: PieceType | None) -> int:
     """Get the strength of a unit piece type."""
     if piece_type is None:
         return -1
-    strength_map = {
-        PieceType.PEASANT: 1,
-        PieceType.SPEARMAN: 2,
-        PieceType.BARON: 3,
-        PieceType.KNIGHT: 4,
-    }
-    return strength_map.get(piece_type, -1)
+    return _STRENGTH_MAP.get(piece_type, -1)
 
 
 def get_unit_by_strength(strength: int) -> PieceType | None:
     """Get unit piece type by strength."""
-    strength_map = {
-        1: PieceType.PEASANT,
-        2: PieceType.SPEARMAN,
-        3: PieceType.BARON,
-        4: PieceType.KNIGHT,
-    }
-    return strength_map.get(strength)
+    return _UNIT_BY_STRENGTH.get(strength)
 
 
 def get_merge_result(piece1: PieceType, piece2: PieceType) -> PieceType | None:

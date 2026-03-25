@@ -28,8 +28,8 @@ class TestRNGState:
 
     def test_different_level_codes_produce_different_seeds(self):
         """Test that different level codes produce different seeds."""
-        level_code1 = get_level_code(1)
-        level_code2 = get_level_code(2)
+        level_code1 = get_level_code(0)
+        level_code2 = get_level_code(1)
         
         if level_code1 and level_code2:
             seed1 = get_deterministic_seed(level_code1)
