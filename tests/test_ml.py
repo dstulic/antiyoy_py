@@ -177,7 +177,8 @@ class TestActionMapper:
         gs = _small_game_state()
         mapper = ActionMapper(len(gs.hexes))
         mask = mapper.get_action_mask(gs, HColor.BLUE)
-        assert not mask.any(), "No valid actions when it's not our turn"
+        assert mask[0], "EndTurn fallback is always valid"
+        assert not mask[1:].any(), "No real actions when it's not our turn"
 
     def test_mask_campaign_level(self):
         from ml.action_space import ActionMapper

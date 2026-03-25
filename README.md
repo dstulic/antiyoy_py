@@ -124,6 +124,9 @@ python -m ml.train \
     --shaping-weight 0.1 \    # reward shaping weight for ownership changes
     --log-dir ml_logs \       # evaluation logs
     --model-dir ml_models     # checkpoint and final model output
+
+python -m ml.train --algo MaskablePPO --timesteps 1000000 --level-range 0 5 --difficulty campaign --n-envs 4 --lr 0.0003 --max-turns 500 --shaping-weight 0.1 --log-dir ml_logs --model-dir ml_models
+
 ```
 
 `--difficulty campaign` (the default) automatically uses the level-appropriate difficulty from the campaign progression (Easy for levels 0-11, Average for 12-23, Hard for 24-59, etc.).

@@ -116,6 +116,7 @@ class ActionMapper:
     ) -> np.ndarray:
         """Return a boolean mask (True = valid) over the full action space."""
         mask = np.zeros(self.action_space_size, dtype=bool)
+        mask[0] = True  # EndTurn is always valid as a safe fallback
         hexes = game_state.hexes
 
         current_color = game_state.entities_manager.get_current_color()
@@ -124,9 +125,6 @@ class ActionMapper:
 
         if game_state.game_end_manager.is_game_ended():
             return mask
-
-        # EndTurn is always valid on our turn
-        mask[0] = True
 
         hex_index = {id(h): i for i, h in enumerate(hexes)}
 

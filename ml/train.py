@@ -68,6 +68,7 @@ def make_env(cfg: TrainConfig, rank: int = 0):
     def _init():
         from ml.env import AntiyoyEnv
         from ml.reward import DefaultRewardCalculator
+        from stable_baselines3.common.monitor import Monitor
 
         env = AntiyoyEnv(
             level_indices=cfg.level_indices,
@@ -75,16 +76,22 @@ def make_env(cfg: TrainConfig, rank: int = 0):
             max_turns=cfg.max_turns,
             reward_calculator=DefaultRewardCalculator(shaping_weight=cfg.shaping_weight),
         )
+        env = Monitor(env)
         env.reset(seed=cfg.seed + rank)
         return env
     return _init
 
 
 def train(cfg: TrainConfig) -> None:
+    import torch
     from sb3_contrib import MaskablePPO
     from sb3_contrib.common.maskable.callbacks import MaskableEvalCallback
     from stable_baselines3.common.vec_env import SubprocVecEnv
     from stable_baselines3.common.callbacks import CheckpointCallback
+
+    # Large discrete action spaces (N^2 + N*7 + 1) cause float32 softmax
+    # rounding to violate PyTorch's strict Simplex check.
+    torch.distributions.Distribution.set_default_validate_args(False)
 
     os.makedirs(cfg.model_dir, exist_ok=True)
     os.makedirs(cfg.log_dir, exist_ok=True)

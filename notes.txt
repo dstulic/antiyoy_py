@@ -1,0 +1,8 @@
+
+add replay
+add statistics.
+
+
+start collecting the data on how well AIs perform.
+
+

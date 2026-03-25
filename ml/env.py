@@ -1,5 +1,7 @@
 """Gymnasium environment wrapping the Antiyoy game engine."""
 
+import os
+import sys
 from typing import Optional, List
 
 import numpy as np
@@ -56,6 +58,7 @@ class AntiyoyEnv(gymnasium.Env):
         max_turns: int = 500,
         observation_encoder: Optional[ObservationEncoder] = None,
         reward_calculator: Optional[RewardCalculator] = None,
+        verbose: bool = False,
     ):
         super().__init__()
 
@@ -64,6 +67,7 @@ class AntiyoyEnv(gymnasium.Env):
         self.requested_agent_color = agent_color
         self.opponent_difficulty = opponent_difficulty
         self.max_turns = max_turns
+        self.verbose = verbose
         self._current_level_index: Optional[int] = None
 
         self.obs_encoder = observation_encoder or FlatObservationEncoder()
@@ -185,7 +189,9 @@ class AntiyoyEnv(gymnasium.Env):
     def action_masks(self) -> np.ndarray:
         """Return action mask for sb3-contrib ``MaskablePPO`` / ``MaskableA2C``."""
         if self.game_state is None or self.agent_color is None:
-            return np.zeros(self.action_space.n, dtype=bool)
+            mask = np.zeros(self.action_space.n, dtype=bool)
+            mask[0] = True  # EndTurn fallback so mask is never all-zeros
+            return mask
         return self.action_mapper.get_action_mask(self.game_state, self.agent_color)
 
     # ------------------------------------------------------------------
@@ -246,6 +252,13 @@ class AntiyoyEnv(gymnasium.Env):
             if entity.is_artificial_intelligence():
                 entity.set_ai_difficulty(difficulty)
 
+    def _suppress_stdout(self):
+        """Context manager that silences stdout when verbose is False."""
+        import contextlib
+        if self.verbose:
+            return contextlib.nullcontext()
+        return contextlib.redirect_stdout(open(os.devnull, "w"))
+
     def _advance_opponents(self) -> None:
         """Run AI turns until it is the agent's turn or the game ends."""
         gs = self.game_state
@@ -256,7 +269,8 @@ class AntiyoyEnv(gymnasium.Env):
         if current and current.color == self.agent_color:
             return
 
-        gs.ai_manager.process_ai_turns()
+        with self._suppress_stdout():
+            gs.ai_manager.process_ai_turns()
 
     def _make_info(self) -> dict:
         gs = self.game_state
