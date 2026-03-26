@@ -53,9 +53,12 @@ def cleanup_oldest_session():
 def _apply_entity_difficulties(game_state, level_index, difficulties=None):
     """
     Apply AI difficulty: per-entity from difficulties list when provided, else campaign default for all AIs.
-    difficulties: optional list of strings, one per player in turn order: "human", "easy", "average", "hard", "expert", "balancer".
+    difficulties: optional list of strings, one per player in turn order:
+        "human", "easy", "average", "hard", "expert", "balancer", or "ml".
+    When "ml" is selected, the entity type is swapped to AI_ML so AIManager
+    routes it to the trained MlAI model instead of the balancer.
     """
-    from core.enums import Difficulty
+    from core.enums import Difficulty, EntityType
     from campaign.manager import CampaignManager
     campaign_manager = CampaignManager()
     default_difficulty = campaign_manager.get_difficulty(level_index)
@@ -72,6 +75,10 @@ def _apply_entity_difficulties(game_state, level_index, difficulties=None):
             raw = difficulties[i]
             if raw is None or (isinstance(raw, str) and raw.lower() == "human"):
                 continue
+            if isinstance(raw, str) and raw.lower() == "ml":
+                entity.type = EntityType.AI_ML
+                entity.set_ai_difficulty(default_difficulty)
+                continue
             try:
                 d = Difficulty(raw) if isinstance(raw, str) else raw
                 entity.set_ai_difficulty(d)
@@ -82,7 +89,10 @@ def _apply_entity_difficulties(game_state, level_index, difficulties=None):
 
 
 def _assert_all_ai_difficulties_set(game_state) -> None:
-    """Raise ValueError if any AI entity has no ai_difficulty set (catches init/load bugs)."""
+    """Raise ValueError if any AI entity has no ai_difficulty set (catches init/load bugs),
+    or if an ML entity is configured but no trained model file exists."""
+    import os
+    from core.enums import EntityType
     entities = getattr(game_state, 'entities_manager', None) and game_state.entities_manager.entities or []
     for entity in entities:
         if entity.is_artificial_intelligence() and entity.get_ai_difficulty() is None:
@@ -91,6 +101,13 @@ def _assert_all_ai_difficulties_set(game_state) -> None:
                 "Level/save must include difficulty for every AI (format: type>color>name>difficulty). "
                 "Start a new game from campaign and save again."
             )
+        if entity.type == EntityType.AI_ML:
+            model_path = game_state.ai_manager._ml_model_path + ".zip"
+            if not os.path.isfile(model_path):
+                raise ValueError(
+                    f"ML model not found at '{model_path}'. "
+                    "Train a model first with: python -m ml.train"
+                )
 
 
 @app.route('/')

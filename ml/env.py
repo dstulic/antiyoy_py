@@ -41,6 +41,10 @@ class AntiyoyEnv(gymnasium.Env):
         level is used automatically via ``CampaignManager.get_difficulty``.
     max_turns : int
         Maximum number of full turn-cycles (laps) before truncation.
+    max_steps : int | None
+        Hard cap on ``step()`` calls per episode.  When set, the episode
+        is truncated after this many steps regardless of turn count.
+        Useful for bounding eval time with untrained policies.
     observation_encoder : ObservationEncoder | None
         Pluggable encoder; defaults to ``FlatObservationEncoder``.
     reward_calculator : RewardCalculator | None
@@ -56,6 +60,7 @@ class AntiyoyEnv(gymnasium.Env):
         agent_color: Optional[HColor] = None,
         opponent_difficulty: Optional[Difficulty] = None,
         max_turns: int = 500,
+        max_steps: Optional[int] = None,
         observation_encoder: Optional[ObservationEncoder] = None,
         reward_calculator: Optional[RewardCalculator] = None,
         verbose: bool = False,
@@ -67,6 +72,7 @@ class AntiyoyEnv(gymnasium.Env):
         self.requested_agent_color = agent_color
         self.opponent_difficulty = opponent_difficulty
         self.max_turns = max_turns
+        self.max_steps = max_steps
         self.verbose = verbose
         self._current_level_index: Optional[int] = None
 
@@ -176,7 +182,11 @@ class AntiyoyEnv(gymnasium.Env):
 
         if not terminated and self._turn_count >= self.max_turns:
             truncated = True
-            terminated = True  # treat as terminal for reward purposes
+            terminated = True
+
+        if not terminated and self.max_steps and self._step_count >= self.max_steps:
+            truncated = True
+            terminated = True
 
         reward = self.reward_calc.calculate(
             self.game_state, self.agent_color, terminated, {}

@@ -211,3 +211,6 @@ playthrough_results.csv
 playthrough_results.png
 replays/
 .vscode/
+.python-version
+ml_logs/
+ml_tb_logs/

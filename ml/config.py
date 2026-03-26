@@ -36,3 +36,10 @@ class TrainConfig:
     eval_episodes: int = 5
     save_freq: int = 50_000
     tensorboard_log: str = "ml_tb_logs"
+    device_override: Optional[str] = None
+    no_eval: bool = False
+
+    # Evaluation limits (separate from training)
+    eval_max_turns: int = 50
+    eval_max_steps: int = 5_000
+    n_eval_envs: int = 5

@@ -42,6 +42,17 @@ def _parse_args() -> TrainConfig:
     parser.add_argument("--shaping-weight", type=float, default=0.1)
     parser.add_argument("--log-dir", type=str, default="ml_logs")
     parser.add_argument("--model-dir", type=str, default="ml_models")
+    parser.add_argument("--device", type=str, default=None,
+                        choices=["cpu", "cuda", "mps"],
+                        help="Override device selection (default: auto-detect)")
+    parser.add_argument("--no-eval", action="store_true",
+                        help="Disable evaluation callback (useful for short runs)")
+    parser.add_argument("--eval-max-turns", type=int, default=50,
+                        help="Max turns per eval episode (default: 50)")
+    parser.add_argument("--eval-max-steps", type=int, default=5000,
+                        help="Max steps per eval episode (default: 5000)")
+    parser.add_argument("--n-eval-envs", type=int, default=5,
+                        help="Number of parallel eval environments (default: 4)")
     args = parser.parse_args()
 
     difficulty = None if args.difficulty == "campaign" else Difficulty(args.difficulty)
@@ -59,12 +70,17 @@ def _parse_args() -> TrainConfig:
         shaping_weight=args.shaping_weight,
         log_dir=args.log_dir,
         model_dir=args.model_dir,
+        device_override=args.device,
+        no_eval=args.no_eval,
+        eval_max_turns=args.eval_max_turns,
+        eval_max_steps=args.eval_max_steps,
+        n_eval_envs=args.n_eval_envs,
     )
     return cfg
 
 
 def make_env(cfg: TrainConfig, rank: int = 0):
-    """Return a callable that creates one AntiyoyEnv."""
+    """Return a callable that creates one AntiyoyEnv for training."""
     def _init():
         from ml.env import AntiyoyEnv
         from ml.reward import DefaultRewardCalculator
@@ -74,6 +90,27 @@ def make_env(cfg: TrainConfig, rank: int = 0):
             level_indices=cfg.level_indices,
             opponent_difficulty=cfg.opponent_difficulty,
             max_turns=cfg.max_turns,
+            reward_calculator=DefaultRewardCalculator(shaping_weight=cfg.shaping_weight),
+        )
+        env = Monitor(env)
+        env.reset(seed=cfg.seed + rank)
+        return env
+    return _init
+
+
+def make_eval_env(cfg: TrainConfig, rank: int = 0):
+    """Return a callable that creates one AntiyoyEnv for evaluation,
+    using tighter turn/step limits to prevent runaway episodes."""
+    def _init():
+        from ml.env import AntiyoyEnv
+        from ml.reward import DefaultRewardCalculator
+        from stable_baselines3.common.monitor import Monitor
+
+        env = AntiyoyEnv(
+            level_indices=cfg.level_indices,
+            opponent_difficulty=cfg.opponent_difficulty,
+            max_turns=cfg.eval_max_turns,
+            max_steps=cfg.eval_max_steps,
             reward_calculator=DefaultRewardCalculator(shaping_weight=cfg.shaping_weight),
         )
         env = Monitor(env)
@@ -100,13 +137,24 @@ def train(cfg: TrainConfig) -> None:
     # Vectorised training environments
     env = SubprocVecEnv([make_env(cfg, i) for i in range(cfg.n_envs)])
 
-    # Single evaluation environment
-    eval_env = SubprocVecEnv([make_env(cfg, cfg.n_envs)])
+    eval_env = None
+    if not cfg.no_eval:
+        eval_env = SubprocVecEnv([
+            make_eval_env(cfg, cfg.n_envs + i) for i in range(cfg.n_eval_envs)
+        ])
 
     algo_cls = MaskablePPO
     if cfg.algorithm == "MaskableA2C":
         from sb3_contrib import MaskableA2C
         algo_cls = MaskableA2C
+
+    if cfg.device_override:
+        device = cfg.device_override
+    elif torch.cuda.is_available():
+        device = "cuda"
+    else:
+        device = "cpu"
+    print(f"Using {device} device")
 
     model_kwargs = dict(
         policy="MlpPolicy",
@@ -119,6 +167,7 @@ def train(cfg: TrainConfig) -> None:
         seed=cfg.seed,
         verbose=1,
         tensorboard_log=cfg.tensorboard_log,
+        device=device,
     )
     if cfg.algorithm == "MaskablePPO":
         model_kwargs.update(
@@ -136,20 +185,26 @@ def train(cfg: TrainConfig) -> None:
             save_path=cfg.model_dir,
             name_prefix="antiyoy",
         ),
-        MaskableEvalCallback(
+    ]
+    if eval_env is not None:
+        callbacks.append(MaskableEvalCallback(
             eval_env,
             best_model_save_path=os.path.join(cfg.model_dir, "best"),
             log_path=cfg.log_dir,
             eval_freq=max(cfg.eval_freq // cfg.n_envs, 1),
             n_eval_episodes=cfg.eval_episodes,
             deterministic=True,
-        ),
-    ]
+        ))
 
     print(f"Training {cfg.algorithm} for {cfg.total_timesteps} timesteps")
     diff_label = cfg.opponent_difficulty.value if cfg.opponent_difficulty else "campaign"
     print(f"  levels={cfg.level_indices}  difficulty={diff_label}")
     print(f"  n_envs={cfg.n_envs}  lr={cfg.learning_rate}")
+    if eval_env is not None:
+        print(f"  eval: {cfg.n_eval_envs} envs, {cfg.eval_episodes} episodes, "
+              f"max_turns={cfg.eval_max_turns}, max_steps={cfg.eval_max_steps}")
+    else:
+        print("  eval: disabled")
 
     model.learn(total_timesteps=cfg.total_timesteps, callback=callbacks)
 
@@ -158,7 +213,8 @@ def train(cfg: TrainConfig) -> None:
     print(f"Final model saved to {final_path}")
 
     env.close()
-    eval_env.close()
+    if eval_env is not None:
+        eval_env.close()
 
 
 def main() -> int:

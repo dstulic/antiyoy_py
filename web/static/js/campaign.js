@@ -7,6 +7,7 @@ const AI_OPTIONS = [
     { value: 'hard', label: 'Hard' },
     { value: 'expert', label: 'Expert' },
     { value: 'balancer', label: 'Balancer' },
+    { value: 'ml', label: 'ML Model' },
 ];
 
 let currentSelectorLevelIndex = null;

@@ -126,8 +126,8 @@ The ML system is a Gymnasium environment (`ml/env.py`) that wraps the game engin
 | `ml/observation.py` | `FlatObservationEncoder` -- converts game state to ~120-float numpy array |
 | `ml/action_space.py` | `ActionMapper` -- maps discrete indices to commands, generates action masks |
 | `ml/reward.py` | `DefaultRewardCalculator` -- terminal +1/-1 win/loss, optional ownership shaping |
-| `ml/config.py` | `TrainConfig` dataclass with all hyperparameters |
-| `ml/train.py` | Training entry point, sets up SubprocVecEnv, MaskablePPO, callbacks |
+| `ml/config.py` | `TrainConfig` dataclass with all hyperparameters (training + eval) |
+| `ml/train.py` | Training entry point, `make_env`/`make_eval_env`, SubprocVecEnv, MaskablePPO, callbacks |
 | `ml/ml_ai.py` | `MlAI` -- loads trained model for inference as an in-game AI player |
 
 ### Action Space
@@ -224,11 +224,34 @@ Key tags to monitor:
 
 Requires `Monitor` wrapper (already added in `make_env`).
 
+Note: `rollout/ep_rew_mean` and `rollout/ep_len_mean` come from **training** episodes completing during data collection (via the `Monitor` wrapper), not from the eval callback. The eval callback logs under `eval/mean_reward` and `eval/mean_ep_length`.
+
+### Evaluation callback
+
+`MaskableEvalCallback` periodically pauses training to run the current policy on a separate set of eval environments. It plays `eval_episodes` full games deterministically, logs mean reward/length, and saves the best model.
+
+**The eval hang problem**: with an untrained deterministic policy, eval episodes can run for hundreds of thousands of steps — the agent dithers without making progress, and games always run to the turn limit. With a single eval env, this could take hours.
+
+**Mitigations implemented** (all configurable via CLI):
+
+| Setting | Default | CLI flag | Purpose |
+|---|---|---|---|
+| `eval_max_turns` | 50 | `--eval-max-turns` | Separate turn limit for eval (vs 500 for training) |
+| `eval_max_steps` | 5000 | `--eval-max-steps` | Hard cap on `step()` calls per eval episode |
+| `n_eval_envs` | 4 | `--n-eval-envs` | Parallel eval environments (vs 1 previously) |
+| `no_eval` | false | `--no-eval` | Disable eval entirely (useful for short test runs) |
+
+Eval envs are built by `make_eval_env()` in `train.py`, which passes the tighter limits to `AntiyoyEnv`. The `max_steps` parameter in `AntiyoyEnv` truncates the episode after N total `step()` calls regardless of turn count, providing a hard bound on eval time even when an episode never finishes a turn.
+
+Worst case with defaults: 5 episodes x 5000 steps split across 4 workers = seconds, not hours.
+
 ### Resume training
 Not yet implemented. Each run starts fresh. To add: load model with `algo_cls.load(path, env=env)` and continue `.learn()`. Action/observation space must match between runs.
 
 ### Apple Silicon (M4 Mac)
-PyTorch MPS (Metal GPU) is not accessible from Docker -- Docker on macOS runs a Linux VM without Metal drivers. Run training natively with a venv for full MPS acceleration. The bottleneck is CPU-bound game engine code, not GPU.
+PyTorch MPS (Metal GPU) is available natively but **hurts performance** for this workload. With small MLP policies, CPU-to-GPU transfer overhead on MPS outweighs compute gains. In testing, MPS dropped training FPS from ~2128 to ~616-871. The bottleneck is CPU-bound game engine code (province flood-fill, move zone propagation), not neural network inference. The default device is CPU; use `--device mps` to override if experimenting with larger networks.
+
+MPS is not accessible from Docker — Docker on macOS runs a Linux VM without Metal drivers.
 
 ## Dependencies
 
