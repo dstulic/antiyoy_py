@@ -1,4 +1,116 @@
-# ML Development Notes
+# Project Development Notes
+
+Chronological history of work on the Antiyoy Python project.
+
+---
+
+## Phase 1: Game Engine Port
+
+The project is a Python port of the original Antiyoy Android/Java game. The core game engine was ported including:
+
+- **Core game logic**: Hex grid, provinces (flood-fill based territory grouping), adjacency graph, move zone computation (wave propagation), economics (income/consumption per province).
+- **Event system**: `AbstractEvent` base class with types like `UNIT_MOVE`, `PIECE_BUILD`, `PIECE_ADD`, `PIECE_DELETE`, `HEX_CHANGE_COLOR`, `SET_MONEY`, `TURN_END`, etc. Events flow through `EventsManager` with validation and listener notification.
+- **AI system**: `AIManager` with `BalancerAI` ported from the original, supporting difficulty levels (easy, average, hard, expert, balancer).
+- **Save/load system**: `GameStateEncoder`/`GameStateDecoder` with a section-based format (`#hexes:`, `#provinces:`, `#turn:`, etc.). Includes `SECTION_ORIGINAL_LEVEL_CODE` for replay file support.
+- **Campaign**: 156 campaign levels ported from the original game, stored in `campaign/levels.py`.
+- **Command system**: `CommandExecutor`/`CommandValidator` for player actions (move, build, end turn).
+- **Web interface**: Flask app with canvas-based hex grid rendering, pan/zoom, fog of war, game sessions.
+- **Test suite**: 400+ unit tests covering core logic, events, provinces, save/load, AI.
+
+### Key files from the port
+
+| Directory | Purpose |
+|---|---|
+| `core/` | Game state, hex, province, events, rulesets, turns, economics, fog of war, death manager, game end |
+| `campaign/` | 156 level codes, campaign manager with difficulty progression |
+| `save_load/` | Encoder, decoder, format parser |
+| `ai/` | BalancerAI (ported from Java), AI manager |
+| `commands/` | Command types, validator, executor |
+| `web/` | Flask app, templates, static assets (JS/CSS), canvas hex renderer |
+| `tests/` | Unit tests + visual tests |
+
+---
+
+## Phase 2: Replay System
+
+### Problem
+
+The game needed a replay system so completed games could be reviewed step by step. Initial attempts to re-derive game state by re-applying recorded events proved brittle — subtle interdependencies between events, province merges, and hidden state caused persistent mismatches (wrong hex colors, missing pieces).
+
+### Solution: Snapshot-based replay
+
+Instead of re-applying events, the system records the full game state at every notable event during live gameplay. This guarantees perfect replay.
+
+#### Recording (during gameplay)
+
+- `HistoryManager` listens for events via `on_event_applied()`.
+- After every notable event and every `TURN_END`, it captures a `ReplaySnapshot` containing: hex state, provinces (id/money/color), turn/lap, entities, and the event encoding (for animations).
+- New event types added: `TURN_BEGIN`, `LAP_BEGIN`, `PLAYER_TURN_STATS` — to capture turn boundaries and per-player economic stats.
+
+#### Diff-based storage optimization
+
+Full snapshots of a 384-hex map are ~6.5 KB each. With ~12 snapshots per turn, a 400-turn game would be ~32 MB in memory and ~43 MB on disk.
+
+The system stores only hex diffs: the first snapshot is full, subsequent ones store only changed hexes (prefixed with `D:`). Typically 1-3 hexes change per event.
+
+**Results on the largest map (level 69, 384 hexes, 5 players, 438 turns):**
+
+| Metric | Full snapshots | Diff snapshots | Reduction |
+|---|---|---|---|
+| In-memory | ~31.6 MB | 1.86 MB | 94.1% |
+| Replay file on disk | ~43.3 MB | 2.67 MB | 93.8% |
+| Average per snapshot | 6,476 B | 390 B | 94.0% |
+
+#### Replay playback (frontend)
+
+The backend API (`/api/replay/content`) computes full-state steps from the diff snapshots, then converts them to a compact diff format for the frontend:
+- Sends `initial_state` (full hex list) + `step_diffs[]` (only changed hexes per step, plus animation data and entity stats).
+- A 384-hex, 7739-step replay sends ~6.8 MB JSON instead of ~60+ MB.
+
+The frontend (`replay.js`) maintains a running `hexMap` patched forward/backward via diffs:
+- **Forward**: applies hex changes, stores reverse patch for undo.
+- **Backward**: applies stored reverse patch (instant).
+- **Jump to beginning**: rebuilds from initial state.
+- **Scrubber**: range slider for seeking to any position.
+- **Play/Pause**: auto-advance with configurable speed multiplier (vertical slider between pause/play buttons). All other controls auto-pause playback.
+
+#### Files modified/created for replay
+
+| File | Changes |
+|---|---|
+| `core/history_manager.py` | `ReplaySnapshot` class, diff computation (`_compute_hex_diff`), `_prev_hex_map` tracking, snapshot recording in `on_event_applied` |
+| `core/enums.py` | Added `TURN_BEGIN`, `LAP_BEGIN`, `PLAYER_TURN_STATS` to `EventType` |
+| `core/events.py` | New event classes: `EventTurnBegin`, `EventLapBegin`, `EventPlayerTurnStats`. Extended `EventTurnEnd` with `turn_index_after`/`lap_after`. Fixed `EventUnitMove.is_valid()` for replay, `EventPieceBuild.apply_change()` for color transfer |
+| `save_load/format.py` | Added `SECTION_REPLAY_SNAPSHOTS` |
+| `save_load/encoder.py` | Encodes replay snapshots as base64 section |
+| `save_load/decoder.py` | Decodes replay snapshots, fixed `_decode_hexes` to set pieces directly (bypass event validation during cloning) |
+| `save_load/replay_steps.py` | Full rewrite: builds steps from diff-based snapshots with incremental hex reconstruction, animation extraction from event encodings, income computation from hex data |
+| `save_load/replay.py` | Replay file saving |
+| `commands/executor.py` | Sets `current_color` on `EventTurnEnd` before apply |
+| `web/app.py` | Added `_steps_to_diff_format()`, updated `/api/replay/content` to send diff-based response |
+| `web/static/js/replay.js` | Diff-based state management (hexMap + reversePatches), scrubber, play/pause with speed control, auto-pause on manual navigation |
+| `web/static/css/replay.css` | Replay UI styling, scrubber, speed slider |
+| `web/templates/replay.html` | Replay page with control bar, scrubber, speed slider |
+| `tools/ai_playthrough.py` | Generates replay files from AI-vs-AI games |
+| `tools/verify_replay_perfect.py` | Verifies replayed end state matches saved state |
+
+#### Replay status overlay
+
+- Shows `Turn: Y-X` (lap-turn_index).
+- Entity stats table: Type, Hex %, Money, Income.
+- `▸` marker on the current player's row (with en-space placeholder on inactive rows to prevent text jumping).
+- Income computed from hex data using game rules: empty hex = 1, farm = 5, palm/pine = 0, minus unit/tower upkeep.
+- Hex % uses total hex count (including gray) as denominator, matching the live game.
+
+### Tools
+
+- `tools/ai_playthrough.py` — runs an AI game and saves a replay file.
+- `tools/run_playthrough_batch.py` — batch runner for multiple levels/difficulties with CSV output and plots.
+- `tools/verify_replay_perfect.py` — validates replay correctness by comparing final replayed state to saved state.
+
+---
+
+## Phase 3: ML Training
 
 Reference notes for continuing ML training work in any environment.
 
