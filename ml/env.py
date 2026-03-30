@@ -64,6 +64,7 @@ class AntiyoyEnv(gymnasium.Env):
         observation_encoder: Optional[ObservationEncoder] = None,
         reward_calculator: Optional[RewardCalculator] = None,
         verbose: bool = False,
+        log_progress: bool = False,
     ):
         super().__init__()
 
@@ -74,6 +75,7 @@ class AntiyoyEnv(gymnasium.Env):
         self.max_turns = max_turns
         self.max_steps = max_steps
         self.verbose = verbose
+        self.log_progress = log_progress
         self._current_level_index: Optional[int] = None
 
         self.obs_encoder = observation_encoder or FlatObservationEncoder()
@@ -116,10 +118,19 @@ class AntiyoyEnv(gymnasium.Env):
     # Gymnasium API
     # ------------------------------------------------------------------
 
+    def _log(self, msg: str) -> None:
+        if self.log_progress:
+            import time
+            from datetime import datetime
+            pid = os.getpid()
+            ts = datetime.now().strftime("%H:%M:%S")
+            print(f"[{ts} pid={pid}] {msg}", flush=True)
+
     def reset(
         self, *, seed: Optional[int] = None, options: Optional[dict] = None
     ) -> tuple[np.ndarray, dict]:
         super().reset(seed=seed)
+        self._log(f"reset() called, level_indices={self.level_indices}")
 
         # Pick a level
         if self.level_code:
@@ -157,14 +168,30 @@ class AntiyoyEnv(gymnasium.Env):
         assert self.game_state is not None
         self._step_count += 1
 
+        if self.log_progress and self._step_count % 500 == 0:
+            self._log(f"step {self._step_count}/{self.max_steps or '∞'}  "
+                      f"turn={self._turn_count}/{self.max_turns}  "
+                      f"level={self._current_level_index}")
+
+        if self.max_steps and self._step_count >= self.max_steps:
+            if self.log_progress:
+                self._log(f"Episode DONE (max_steps): steps={self._step_count} turns={self._turn_count}")
+            reward = self.reward_calc.calculate(
+                self.game_state, self.agent_color, True, {}
+            )
+            obs = self.obs_encoder.encode(self.game_state, self.agent_color)
+            return obs, reward, True, True, self._make_info()
+
         terminated = False
         truncated = False
 
         command = self.action_mapper.action_to_command(action, self.game_state)
         if command is None:
-            # Invalid action decode -> treat as no-op, small penalty
             obs = self.obs_encoder.encode(self.game_state, self.agent_color)
             return obs, -0.01, False, False, self._make_info()
+
+        if self.log_progress and isinstance(command, EndTurnCommand):
+            self._log(f"EndTurn at step {self._step_count}, turn {self._turn_count} — running opponents")
 
         success, _err = self.executor.execute(command, self.agent_color)
         if not success:
@@ -177,6 +204,8 @@ class AntiyoyEnv(gymnasium.Env):
         elif isinstance(command, EndTurnCommand):
             self._turn_count += 1
             self._advance_opponents()
+            if self.log_progress:
+                self._log(f"Opponents done, turn now {self._turn_count}")
             if self.game_state.game_end_manager.is_game_ended():
                 terminated = True
 
@@ -184,9 +213,10 @@ class AntiyoyEnv(gymnasium.Env):
             truncated = True
             terminated = True
 
-        if not terminated and self.max_steps and self._step_count >= self.max_steps:
-            truncated = True
-            terminated = True
+
+        if self.log_progress and (terminated or truncated):
+            self._log(f"Episode DONE: steps={self._step_count} turns={self._turn_count} "
+                      f"terminated={terminated} truncated={truncated}")
 
         reward = self.reward_calc.calculate(
             self.game_state, self.agent_color, terminated, {}

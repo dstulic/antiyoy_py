@@ -1,0 +1,16 @@
+# Model Registry
+# Each entry describes a training approach / architecture so you can
+# track what changed between experiments.
+#
+# Reference an entry by its key via --model-details <key> (or the
+# model_details field in TrainConfig).  The key and description are
+# written into training_sessions.jsonl alongside energy/resource data.
+
+models:
+  first_approach:
+    name: first_approach
+    description: >
+      MLP policy (MlpPolicy) with action masking via sb3-contrib.
+      Flat observation encodes tile ownership, unit presence, and
+      economy state.  Action space: N^2 move + N*7 build + 1 end-turn.
+      Reward shaping based on territory and economy differential.

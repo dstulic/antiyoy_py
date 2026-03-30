@@ -53,6 +53,9 @@ def _parse_args() -> TrainConfig:
                         help="Max steps per eval episode (default: 5000)")
     parser.add_argument("--n-eval-envs", type=int, default=5,
                         help="Number of parallel eval environments (default: 4)")
+    parser.add_argument("--model-details", type=str, default="first_approach",
+                        help="Key into ml/model_registry.yaml describing "
+                             "this approach (default: first_approach)")
     args = parser.parse_args()
 
     difficulty = None if args.difficulty == "campaign" else Difficulty(args.difficulty)
@@ -75,6 +78,7 @@ def _parse_args() -> TrainConfig:
         eval_max_turns=args.eval_max_turns,
         eval_max_steps=args.eval_max_steps,
         n_eval_envs=args.n_eval_envs,
+        model_details=args.model_details,
     )
     return cfg
 
@@ -112,6 +116,7 @@ def make_eval_env(cfg: TrainConfig, rank: int = 0):
             max_turns=cfg.eval_max_turns,
             max_steps=cfg.eval_max_steps,
             reward_calculator=DefaultRewardCalculator(shaping_weight=cfg.shaping_weight),
+            # log_progress=True,
         )
         env = Monitor(env)
         env.reset(seed=cfg.seed + rank)
@@ -120,11 +125,65 @@ def make_eval_env(cfg: TrainConfig, rank: int = 0):
 
 
 def train(cfg: TrainConfig) -> None:
+    import time
+    from datetime import datetime
+
     import torch
     from sb3_contrib import MaskablePPO
     from sb3_contrib.common.maskable.callbacks import MaskableEvalCallback
     from stable_baselines3.common.vec_env import SubprocVecEnv
-    from stable_baselines3.common.callbacks import CheckpointCallback
+    from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
+
+    from ml.training_logger import TrainingLogger
+
+    def _now():
+        return datetime.now().strftime("%H:%M:%S")
+
+    class DiagnosticsCallback(BaseCallback):
+        """Logs timestamps at every training phase boundary."""
+
+        def __init__(self):
+            super().__init__(verbose=0)
+            self._rollout_t0 = None
+            self._iter = 0
+
+        def _on_training_start(self):
+            print(f"[{_now()}] TRAIN_LOOP START", flush=True)
+
+        def _on_rollout_start(self):
+            self._iter += 1
+            self._rollout_t0 = time.time()
+            print(f"[{_now()}] ROLLOUT {self._iter} START "
+                  f"(collecting {self.model.n_steps * self.training_env.num_envs} steps)",
+                  flush=True)
+
+        def _on_rollout_end(self):
+            elapsed = time.time() - self._rollout_t0 if self._rollout_t0 else 0
+            print(f"[{_now()}] ROLLOUT {self._iter} END ({elapsed:.1f}s)  "
+                  f"total_timesteps={self.num_timesteps}  — gradient update next",
+                  flush=True)
+
+        def _on_step(self):
+            return True
+
+        def _on_training_end(self):
+            print(f"[{_now()}] TRAIN_LOOP END  total_timesteps={self.num_timesteps}",
+                  flush=True)
+
+    class TimedEvalCallback(MaskableEvalCallback):
+        """MaskableEvalCallback that prints timestamps before/after eval."""
+
+        def _on_step(self) -> bool:
+            if self.eval_freq > 0 and self.n_calls % self.eval_freq == 0:
+                print(f"[{_now()}] EVAL START at {self.num_timesteps} timesteps "
+                      f"({self.n_eval_episodes} episodes, {self.eval_env.num_envs} envs)",
+                      flush=True)
+                t0 = time.time()
+                result = super()._on_step()
+                elapsed = time.time() - t0
+                print(f"[{_now()}] EVAL END ({elapsed:.1f}s)", flush=True)
+                return result
+            return True
 
     # Large discrete action spaces (N^2 + N*7 + 1) cause float32 softmax
     # rounding to violate PyTorch's strict Simplex check.
@@ -180,6 +239,7 @@ def train(cfg: TrainConfig) -> None:
     model = algo_cls(**model_kwargs)
 
     callbacks = [
+        DiagnosticsCallback(),
         CheckpointCallback(
             save_freq=max(cfg.save_freq // cfg.n_envs, 1),
             save_path=cfg.model_dir,
@@ -187,7 +247,7 @@ def train(cfg: TrainConfig) -> None:
         ),
     ]
     if eval_env is not None:
-        callbacks.append(MaskableEvalCallback(
+        callbacks.append(TimedEvalCallback(
             eval_env,
             best_model_save_path=os.path.join(cfg.model_dir, "best"),
             log_path=cfg.log_dir,
@@ -206,15 +266,34 @@ def train(cfg: TrainConfig) -> None:
     else:
         print("  eval: disabled")
 
-    model.learn(total_timesteps=cfg.total_timesteps, callback=callbacks)
+    logger = TrainingLogger(cfg, device)
+    logger.start()
 
-    final_path = os.path.join(cfg.model_dir, "antiyoy_final")
-    model.save(final_path)
-    print(f"Final model saved to {final_path}")
+    completed = False
+    try:
+        model.learn(total_timesteps=cfg.total_timesteps, callback=callbacks)
+        completed = True
+    except KeyboardInterrupt:
+        print("\n\nTraining interrupted by user (Ctrl+C).")
+    finally:
+        timesteps = getattr(model, "num_timesteps", 0)
 
-    env.close()
-    if eval_env is not None:
-        eval_env.close()
+        final_path = os.path.join(cfg.model_dir, "antiyoy_final")
+        try:
+            model.save(final_path)
+            print(f"Model saved to {final_path}")
+        except Exception as e:
+            print(f"Warning: could not save model: {e}")
+
+        logger.stop(completed=completed, timesteps_completed=timesteps)
+
+        for vec_env in (env, eval_env):
+            if vec_env is None:
+                continue
+            try:
+                vec_env.close()
+            except (EOFError, BrokenPipeError, ConnectionResetError):
+                pass
 
 
 def main() -> int:

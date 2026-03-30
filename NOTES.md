@@ -238,12 +238,43 @@ Note: `rollout/ep_rew_mean` and `rollout/ep_len_mean` come from **training** epi
 |---|---|---|---|
 | `eval_max_turns` | 50 | `--eval-max-turns` | Separate turn limit for eval (vs 500 for training) |
 | `eval_max_steps` | 5000 | `--eval-max-steps` | Hard cap on `step()` calls per eval episode |
-| `n_eval_envs` | 4 | `--n-eval-envs` | Parallel eval environments (vs 1 previously) |
+| `n_eval_envs` | 5 | `--n-eval-envs` | Parallel eval environments |
 | `no_eval` | false | `--no-eval` | Disable eval entirely (useful for short test runs) |
 
 Eval envs are built by `make_eval_env()` in `train.py`, which passes the tighter limits to `AntiyoyEnv`. The `max_steps` parameter in `AntiyoyEnv` truncates the episode after N total `step()` calls regardless of turn count, providing a hard bound on eval time even when an episode never finishes a turn.
 
-Worst case with defaults: 5 episodes x 5000 steps split across 4 workers = seconds, not hours.
+**Bug fix — `max_steps` bypass**: the original `max_steps` check was at the bottom of `step()`, after two early-return paths (invalid action decode → `None`, failed command execution). An untrained policy producing mostly invalid actions would hit these early returns on every step, incrementing `_step_count` but never reaching the truncation check. Episodes ran to 30,000-60,000+ steps despite a 5,000 limit. Fixed by moving the `max_steps` check to the top of `step()`, before any early returns.
+
+Worst case with defaults: 5 episodes x 5000 steps split across 5 workers = sub-second eval rounds.
+
+### Training diagnostics
+
+`DiagnosticsCallback` in `train.py` logs timestamps at every phase boundary:
+
+```
+[20:12:00] ROLLOUT 5 START (collecting 16384 steps)
+[20:12:06] ROLLOUT 5 END (6.3s)  total_timesteps=81920  — gradient update next
+[20:12:16] ROLLOUT 6 START (collecting 16384 steps)
+```
+
+- Gap between ROLLOUT END and next ROLLOUT START = gradient update time (~1-10s depending on batch_size/n_epochs).
+- `TimedEvalCallback` wraps `MaskableEvalCallback` with `EVAL START`/`EVAL END` timestamps and duration.
+- Eval envs have `log_progress=True`, printing step counts, turn counts, and EndTurn/opponent timing from each subprocess every 500 steps. Useful for diagnosing whether eval is progressing slowly vs truly stuck.
+
+### Gradient update tuning
+
+With `n_steps=2048`, `n_envs=8`, `batch_size=64`, `n_epochs=10`: each gradient update does `10 * (16384/64) = 2560` mini-batch steps, taking ~10 seconds. Increasing `batch_size` to 256 and reducing `n_epochs` to 5 would cut this to ~320 steps (~1-2s). High `clip_fraction` (>0.3) indicates the policy changes too much per update — fewer epochs can improve stability.
+
+### Playing against the trained model (web UI)
+
+The campaign AI selector dropdown includes "ML Model" as an option alongside difficulty levels. When selected:
+
+1. `_apply_entity_difficulties()` in `web/app.py` swaps the entity's type from `AI_BALANCER` to `AI_ML`
+2. `AIManager.get_ai_for_entity()` sees `EntityType.AI_ML` and returns the lazy-loaded `MlAI`
+3. `MlAI` loads the model from `ml_models/best/best_model.zip` (default path)
+4. A validation check at game init verifies the model file exists before starting
+
+**Action space mismatch fix**: `MlAI` derives the hex count N from the loaded model's `action_space.n` (via the formula `1 + N^2 + N*7`), not from the live game's hex count. During training, the env uses the *max* hex count across all configured levels for a fixed action space. If `MlAI` used the current game's hex count instead, the action mask size would mismatch the model's expected action space, causing a silent exception in `process_ai_turn()` and a stalled game. Actions for non-existent hex indices are safely masked as invalid by `ActionMapper`.
 
 ### Resume training
 Not yet implemented. Each run starts fresh. To add: load model with `algo_cls.load(path, env=env)` and continue `.learn()`. Action/observation space must match between runs.
@@ -253,6 +284,70 @@ PyTorch MPS (Metal GPU) is available natively but **hurts performance** for this
 
 MPS is not accessible from Docker — Docker on macOS runs a Linux VM without Metal drivers.
 
+### Training session logging & energy tracking
+
+Every training run (whether completed or interrupted with Ctrl+C) is logged to `training_sessions.json` in the project root — a pretty-printed JSON array with one entry per session. This tracks model identity, hyperparameters, hardware, resource utilization, energy estimates, and the archived model path.
+
+#### Model registry
+
+`ml/model_registry.yaml` maintains a list of named approaches. Each entry has a key, name, and human-readable description. The active approach is set via `--model-details <key>` (default: `first_approach`, configurable in `TrainConfig.model_details`). The key and description are written into the session log.
+
+#### Resource monitoring
+
+`ResourceMonitor` in `ml/training_logger.py` runs a background daemon thread that samples every 5 seconds:
+- CPU % and RAM usage via `psutil`
+- NVIDIA GPU utilization % and power draw (watts) via `pynvml` when available
+
+The log records avg/peak for all metrics plus sample count.
+
+#### Energy estimation
+
+Two backends, selected automatically:
+
+| Platform | Backend | What it measures |
+|---|---|---|
+| Linux (NVIDIA) | CodeCarbon | Real power via Intel RAPL (CPU) + pynvml (GPU) → kWh + CO2 |
+| macOS | TDP estimate | `chip_TDP × avg_cpu_util% × hours / 1000` |
+
+CodeCarbon is skipped on macOS because it tries `sudo powermetrics` which prompts for a password. The TDP fallback uses `sysctl -n machdep.cpu.brand_string` to identify the chip (M1 through M4, all tiers) and look up its package TDP. The `energy_source` field in the log always records which method was used (e.g. `"codecarbon"` or `"tdp_estimate (45W)"`).
+
+#### Best model archival
+
+After each session, `TrainingLogger._archive_best_model()` copies `ml_models/best/best_model.zip` to `final_models/{model_details}_{timestamp}.zip` with collision avoidance. The path is recorded in the session log. If no best model exists (e.g. eval was disabled or no eval completed), the field is null.
+
+#### Ctrl+C handling
+
+`train()` wraps `model.learn()` in `try/except KeyboardInterrupt/finally`. On interrupt:
+1. The model is saved to `ml_models/antiyoy_final`
+2. The training logger fires (writes log entry, archives best model, prints summary)
+3. `SubprocVecEnv.close()` is wrapped in try/except for `EOFError`/`BrokenPipeError` — Ctrl+C kills child processes before the parent can shut them down cleanly, and the recv() on an already-dead pipe would otherwise crash
+
+#### Console summary
+
+After every session, a summary block is printed:
+
+```
+========================================================
+  Training Session Summary
+========================================================
+  Model details:   first_approach
+  Algorithm:       MaskablePPO
+  Status:          INTERRUPTED (109,936 / 10,000,000 timesteps)
+  Duration:        1m 03s
+
+  CPU avg/peak:    23.6% / 29.9%
+  RAM avg/peak:    23656.9 MB / 23923.3 MB
+  GPU util:        N/A
+  GPU power:       N/A
+
+  Energy:          0.0001 kWh  (tdp_estimate (45W))
+
+  Archived model:  final_models/first_approach_20260327_035810.zip
+
+  Log:             training_sessions.json
+========================================================
+```
+
 ## Dependencies
 
 ```
@@ -261,6 +356,9 @@ stable-baselines3
 sb3-contrib
 tensorboard
 torch (installed as SB3 dependency)
+psutil
+codecarbon (optional — Linux only, skipped on macOS)
+pyyaml
 ```
 
 ## Files Modified from Base Game
@@ -270,6 +368,15 @@ torch (installed as SB3 dependency)
 - `core/core_utils.py` -- moved dicts to module-level constants
 - `core/ruleset.py` -- moved dicts to class-level constants
 - `core/province.py` -- switched WaveWorker to deque
-- `requirements.txt` -- added ML dependencies
+- `web/app.py` -- `_apply_entity_difficulties` swaps entity type to `AI_ML` when "ml" selected; model-existence validation in `_assert_all_ai_difficulties_set`
+- `web/static/js/campaign.js` -- added "ML Model" option to AI selector dropdown
+- `ml/ml_ai.py` -- derives `n_hexes` from loaded model's action space to avoid mask mismatch
+- `ml/env.py` -- added `max_steps` truncation (moved check to top of `step()`), `log_progress` diagnostic prints
+- `ml/train.py` -- `DiagnosticsCallback`, `TimedEvalCallback`, `make_eval_env`, parallel eval, device override, `TrainingLogger` integration, Ctrl+C handling with graceful SubprocVecEnv cleanup
+- `ml/config.py` -- added `eval_max_turns`, `eval_max_steps`, `n_eval_envs`, `no_eval`, `device_override`, `model_details`
+- `ml/training_logger.py` -- new: `ResourceMonitor`, `TrainingLogger`, CodeCarbon wrapper, TDP fallback, model archival, session log writing
+- `ml/model_registry.yaml` -- new: named approach definitions (key, name, description)
+- `training_sessions.json` -- new: append-only session log (pretty-printed JSON array)
+- `requirements.txt` -- added ML dependencies, `psutil`, `codecarbon`, `pyyaml`
 - `tests/test_enums.py` -- updated for `AI_ML`
 - `tests/test_rng_state.py` -- fixed test for duplicate level codes

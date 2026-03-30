@@ -19,22 +19,25 @@ class TrainConfig:
     total_timesteps: int = 1_000_000
     learning_rate: float = 3e-4
     n_steps: int = 2048
-    batch_size: int = 64
-    n_epochs: int = 10
+    batch_size: int = 256
+    n_epochs: int = 5
     gamma: float = 0.99
     gae_lambda: float = 0.95
     clip_range: float = 0.2
     ent_coef: float = 0.01
     vf_coef: float = 0.5
 
+    # Model identity (key into ml/model_registry.yaml)
+    model_details: str = "first_approach"
+
     # Infrastructure
     n_envs: int = 4
     seed: int = 42
     log_dir: str = "ml_logs"
     model_dir: str = "ml_models"
-    eval_freq: int = 20_000
+    eval_freq: int = 50_000
     eval_episodes: int = 5
-    save_freq: int = 50_000
+    save_freq: int = 500_000
     tensorboard_log: str = "ml_tb_logs"
     device_override: Optional[str] = None
     no_eval: bool = False

@@ -15,6 +15,11 @@ stable-baselines3>=2.1.0
 sb3-contrib>=2.1.0
 tensorboard>=2.14.0
 
+# Training session tracking
+psutil>=5.9.0
+codecarbon>=2.3.0
+pyyaml>=6.0
+
 # Utilities
 typing-extensions>=4.5.0
 matplotlib>=3.5.0
