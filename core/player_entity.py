@@ -88,6 +88,8 @@ class PlayerEntity:
         self.relations: List[Relation] = []
         # Per-player AI difficulty (only used when type is AI). None = use game default.
         self.ai_difficulty: Optional["Difficulty"] = None
+        # Path to ML model file (without .zip) when type is AI_ML.
+        self.ml_model_path: Optional[str] = None
 
     def get_relation(self, other_entity: "PlayerEntity") -> Optional[Relation]:
         """Get relation with another entity."""

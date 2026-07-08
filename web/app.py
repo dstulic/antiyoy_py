@@ -54,9 +54,9 @@ def _apply_entity_difficulties(game_state, level_index, difficulties=None):
     """
     Apply AI difficulty: per-entity from difficulties list when provided, else campaign default for all AIs.
     difficulties: optional list of strings, one per player in turn order:
-        "human", "easy", "average", "hard", "expert", "balancer", or "ml".
-    When "ml" is selected, the entity type is swapped to AI_ML so AIManager
-    routes it to the trained MlAI model instead of the balancer.
+        "human", "easy", "average", "hard", "expert", "balancer", or "ml:<model_path>".
+    When an "ml" or "ml:<path>" value is selected, the entity type is swapped to
+    AI_ML and the model path is stored on the entity for AIManager to load.
     """
     from core.enums import Difficulty, EntityType
     from campaign.manager import CampaignManager
@@ -75,9 +75,11 @@ def _apply_entity_difficulties(game_state, level_index, difficulties=None):
             raw = difficulties[i]
             if raw is None or (isinstance(raw, str) and raw.lower() == "human"):
                 continue
-            if isinstance(raw, str) and raw.lower() == "ml":
+            if isinstance(raw, str) and raw.lower().startswith("ml"):
                 entity.type = EntityType.AI_ML
                 entity.set_ai_difficulty(default_difficulty)
+                if ":" in raw:
+                    entity.ml_model_path = raw.split(":", 1)[1]
                 continue
             try:
                 d = Difficulty(raw) if isinstance(raw, str) else raw
@@ -102,7 +104,8 @@ def _assert_all_ai_difficulties_set(game_state) -> None:
                 "Start a new game from campaign and save again."
             )
         if entity.type == EntityType.AI_ML:
-            model_path = game_state.ai_manager._ml_model_path + ".zip"
+            raw_path = getattr(entity, "ml_model_path", None) or "ml_models/best/best_model"
+            model_path = raw_path + ".zip"
             if not os.path.isfile(model_path):
                 raise ValueError(
                     f"ML model not found at '{model_path}'. "
@@ -156,6 +159,34 @@ def game(level_index):
 def replay_page():
     """Replay viewer page (path to replay file passed as query param)."""
     return render_template('replay.html')
+
+
+@app.route('/api/ml/models')
+def api_ml_models():
+    """Return ML models that have a display_name in training_sessions.json."""
+    import json as _json
+    sessions_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "training_sessions.json")
+    if not os.path.isfile(sessions_path):
+        return jsonify({"success": True, "models": []})
+    try:
+        with open(sessions_path) as f:
+            sessions = _json.load(f)
+    except Exception:
+        return jsonify({"success": True, "models": []})
+    models = []
+    for entry in sessions:
+        display_name = entry.get("display_name")
+        final_path = entry.get("final_model_path")
+        if not display_name or not final_path:
+            continue
+        model_path_no_ext = final_path.rsplit(".zip", 1)[0] if final_path.endswith(".zip") else final_path
+        full_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), final_path)
+        models.append({
+            "value": f"ml:{model_path_no_ext}",
+            "label": display_name,
+            "available": os.path.isfile(full_path),
+        })
+    return jsonify({"success": True, "models": models})
 
 
 @app.route('/api/campaign/levels')

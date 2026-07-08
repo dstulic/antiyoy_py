@@ -1,14 +1,31 @@
 // Campaign Selector JavaScript
 
-const AI_OPTIONS = [
+const BASE_AI_OPTIONS = [
     { value: 'human', label: 'Human' },
     { value: 'easy', label: 'Easy' },
     { value: 'average', label: 'Average' },
     { value: 'hard', label: 'Hard' },
     { value: 'expert', label: 'Expert' },
     { value: 'balancer', label: 'Balancer' },
-    { value: 'ml', label: 'ML Model' },
 ];
+
+let AI_OPTIONS = [...BASE_AI_OPTIONS];
+let mlModelsLoaded = false;
+
+function loadMlModels() {
+    if (mlModelsLoaded) return Promise.resolve();
+    return fetch('/api/ml/models', { credentials: 'include' })
+        .then(r => r.json())
+        .then(data => {
+            mlModelsLoaded = true;
+            if (!data.success || !data.models || !data.models.length) return;
+            const mlOptions = data.models
+                .filter(m => m.available)
+                .map(m => ({ value: m.value, label: `ML: ${m.label}` }));
+            AI_OPTIONS = [...BASE_AI_OPTIONS, ...mlOptions];
+        })
+        .catch(() => { mlModelsLoaded = true; });
+}
 
 let currentSelectorLevelIndex = null;
 
@@ -19,9 +36,11 @@ function openAiSelector(levelIndex, defaultDifficulty) {
     const rowsEl = document.getElementById('aiSelectorRows');
     titleEl.textContent = `Level ${levelIndex} – Select AI`;
 
-    fetch(`/api/campaign/level/${levelIndex}/entities`, { credentials: 'include' })
-        .then(response => response.json())
-        .then(data => {
+    Promise.all([
+        loadMlModels(),
+        fetch(`/api/campaign/level/${levelIndex}/entities`, { credentials: 'include' }).then(r => r.json()),
+    ])
+        .then(([_, data]) => {
             if (!data.success) {
                 alert(data.error || 'Failed to load level');
                 return;

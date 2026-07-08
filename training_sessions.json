@@ -54,7 +54,7 @@
     "completed": false,
     "total_timesteps_target": 100000,
     "timesteps_completed": 109936,
-    "final_model_path": "final_models/first_approach_20260326_035810.zip"
+    "final_model_path": "final_models/first_approach_20260326_135810.zip"
   },
   {
     "timestamp": "2026-03-27T03:58:10.741177+00:00",

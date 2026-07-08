@@ -185,6 +185,7 @@ class ActionMapper:
                         piece_idx,
                         hex_index,
                         self,
+                        province,
                     )
 
         return mask
@@ -267,6 +268,16 @@ def _mask_unit_builds(
             mask[mapper._build_index(h_idx, piece_idx)] = True
 
 
+def _is_adjacent_to_farm_or_city(hex_obj, province) -> bool:
+    """True if *hex_obj* has at least one adjacent hex in *province* with a CITY or FARM."""
+    for adj in hex_obj.adjacent_hexes:
+        if adj.get_province() is not province:
+            continue
+        if adj.piece in (PieceType.CITY, PieceType.FARM):
+            return True
+    return False
+
+
 def _mask_static_builds(
     mask: np.ndarray,
     province_hexes: list,
@@ -274,6 +285,7 @@ def _mask_static_builds(
     piece_idx: int,
     hex_index: dict,
     mapper: ActionMapper,
+    province=None,
 ) -> None:
     """Enable mask entries for valid static piece build locations."""
     for h in province_hexes:
@@ -283,6 +295,9 @@ def _mask_static_builds(
 
         if piece_type == PieceType.STRONG_TOWER:
             if h.is_empty() or h.piece == PieceType.TOWER:
+                mask[mapper._build_index(h_idx, piece_idx)] = True
+        elif piece_type == PieceType.FARM:
+            if h.is_empty() and _is_adjacent_to_farm_or_city(h, province):
                 mask[mapper._build_index(h_idx, piece_idx)] = True
         else:
             if h.is_empty():

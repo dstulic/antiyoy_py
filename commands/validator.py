@@ -197,6 +197,18 @@ class CommandValidator:
             else:
                 if not command.hex.is_empty():
                     return False, "Hex must be empty to build this piece"
+
+            # Farms must be adjacent to a City or another Farm in the same province
+            if command.piece_type == PieceType.FARM:
+                has_adjacent_farm_or_city = False
+                for adj in command.hex.adjacent_hexes:
+                    if adj.get_province() is not province:
+                        continue
+                    if adj.piece in (PieceType.CITY, PieceType.FARM):
+                        has_adjacent_farm_or_city = True
+                        break
+                if not has_adjacent_farm_or_city:
+                    return False, "Farm must be placed adjacent to a city or another farm"
         
         return True, None
 

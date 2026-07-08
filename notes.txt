@@ -6,3 +6,8 @@ add statistics.
 start collecting the data on how well AIs perform.
 
 
+figure out how to make gifs.
+figure out model updates to support any size maps.
+get play through results for all levels.
+make ml modular to support any ml system.
+bananas!

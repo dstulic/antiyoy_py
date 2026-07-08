@@ -392,28 +392,52 @@ class TestBuildCommandValidator:
         assert "reachable" in error.lower() or "range" in error.lower()
     
     def test_validate_build_static_piece_on_owned_hex(self):
-        """Test building a static piece on an owned hex."""
-        # Create test hexes
-        hex1 = create_test_hex(0, 0, HColor.RED)
+        """Test building a farm on an owned hex adjacent to a city."""
+        # Create two adjacent hexes: one with city, one empty for farm
+        hex_city = create_test_hex(0, 0, HColor.RED, piece=PieceType.CITY)
+        hex_farm = create_test_hex(0, 1, HColor.RED)
+        hex_city.adjacent_hexes = [hex_farm]
+        hex_farm.adjacent_hexes = [hex_city]
         
-        # Create province
-        province = create_test_province([hex1], HColor.RED, money=100)
+        # Create province containing both hexes
+        province = create_test_province([hex_city, hex_farm], HColor.RED, money=100)
         
         # Create game state
         game_state = create_mock_game_state(
-            [hex1],
+            [hex_city, hex_farm],
             [province],
             HColor.RED
         )
         
-        # Create command
-        command = BuildPieceCommand(hex=hex1, piece_type=PieceType.FARM)
+        # Create command to build farm on the empty hex adjacent to city
+        command = BuildPieceCommand(hex=hex_farm, piece_type=PieceType.FARM)
         
         # Validate
         validator = CommandValidator(game_state)
         is_valid, error = validator.validate(command, HColor.RED)
         
         assert is_valid, f"Command should be valid: {error}"
+
+    def test_validate_build_farm_not_adjacent_to_city_or_farm_fails(self):
+        """Test building a farm on a hex NOT adjacent to city/farm fails."""
+        hex1 = create_test_hex(0, 0, HColor.RED)
+        hex1.adjacent_hexes = []
+        
+        province = create_test_province([hex1], HColor.RED, money=100)
+        
+        game_state = create_mock_game_state(
+            [hex1],
+            [province],
+            HColor.RED
+        )
+        
+        command = BuildPieceCommand(hex=hex1, piece_type=PieceType.FARM)
+        
+        validator = CommandValidator(game_state)
+        is_valid, error = validator.validate(command, HColor.RED)
+        
+        assert not is_valid, "Farm should not be buildable without adjacent city/farm"
+        assert "adjacent" in error.lower()
     
     def test_validate_build_static_piece_on_gray_hex_fails(self):
         """Test building a static piece on a gray hex fails."""
@@ -583,22 +607,25 @@ class TestBuildCommandExecutor:
         assert hex2.piece == PieceType.PEASANT
     
     def test_execute_build_farm(self):
-        """Test executing build farm command."""
-        # Create test hexes
-        hex1 = create_test_hex(0, 0, HColor.RED)
+        """Test executing build farm command on hex adjacent to city."""
+        # Create hex with city and empty hex adjacent to it
+        hex_city = create_test_hex(0, 0, HColor.RED, piece=PieceType.CITY)
+        hex_farm = create_test_hex(0, 1, HColor.RED)
+        hex_city.adjacent_hexes = [hex_farm]
+        hex_farm.adjacent_hexes = [hex_city]
         
         # Create province
-        province = create_test_province([hex1], HColor.RED, money=100)
+        province = create_test_province([hex_city, hex_farm], HColor.RED, money=100)
         
         # Create game state
         game_state = create_mock_game_state(
-            [hex1],
+            [hex_city, hex_farm],
             [province],
             HColor.RED
         )
         
-        # Create command
-        command = BuildPieceCommand(hex=hex1, piece_type=PieceType.FARM)
+        # Create command to build farm on empty hex next to city
+        command = BuildPieceCommand(hex=hex_farm, piece_type=PieceType.FARM)
         
         # Execute
         executor = CommandExecutor(game_state)
@@ -606,7 +633,7 @@ class TestBuildCommandExecutor:
         
         assert success, f"Command should succeed: {error}"
         assert len(game_state.events_manager.applied_events) == 1
-        assert hex1.piece == PieceType.FARM
+        assert hex_farm.piece == PieceType.FARM
         assert province.get_money() == 85  # 100 - 15
     
     def test_execute_build_strong_tower_on_tower(self):
