@@ -24,6 +24,15 @@ class EconomicsManager(IEventListener):
     def __init__(self, game_state: "GameState"):
         """Initialize economics manager."""
         self.game_state = game_state
+        # Optional training handicap: scale down the *positive income* applied
+        # to provinces of every colour except ``income_tax_exempt_color`` by
+        # ``income_tax_rate`` (0.0 = off, 1.0 = keep nothing). Consumption is
+        # untouched, so a taxed opponent keeps its usual AI logic but grows its
+        # treasury more slowly (and can starve if upkeep outpaces net income).
+        # Defaults are inert so real games are unaffected; the ML env sets them
+        # per episode.
+        self.income_tax_rate: float = 0.0
+        self.income_tax_exempt_color = None
         # Register as event listener
         if game_state and game_state.events_manager:
             game_state.events_manager.add_listener(self)
@@ -130,8 +139,14 @@ class EconomicsManager(IEventListener):
             if province.get_color() != current_color:
                 continue
             
-            # Calculate and apply profit
+            # Calculate and apply profit. Optionally tax the positive income of
+            # non-exempt (opponent) provinces as a training handicap; upkeep is
+            # left intact.
             current_money = province.get_money()
-            profit = self.calculate_province_profit(province)
-            new_money = current_money + profit
+            income = self.calculate_province_income(province)
+            if (self.income_tax_rate > 0.0
+                    and province.get_color() != self.income_tax_exempt_color):
+                income = int(income * (1.0 - self.income_tax_rate))
+            consumption = self.calculate_province_consumption(province)
+            new_money = current_money + income - consumption
             province.set_money(new_money)

@@ -1,0 +1,6 @@
+timestamp,model_details,level_index,turns,income_per_turn,money_in_bank,unit_strength,unit_count,defense_strength,tower_count
+2026-07-11T12:49:33,max_map_action_space,0,128,89,20,9,4,34,16
+2026-07-11T12:49:42,max_map_action_space,1,185,107,0,10,4,41,17
+2026-07-11T13:02:06,max_map_action_space,2,74,115,12,18,7,13,6
+2026-07-11T14:28:07,max_map_action_space,3,325,161,0,8,4,128,57
+2026-07-11T15:56:26,max_map_action_space,4,360,226,8,14,7,118,48

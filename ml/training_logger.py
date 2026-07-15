@@ -220,8 +220,12 @@ class TrainingLogger:
         hardware = _get_hardware_info()
         final_model_path = self._archive_best_model()
 
-        diff_label = (self.cfg.opponent_difficulty.value
-                      if self.cfg.opponent_difficulty else "campaign")
+        if getattr(self.cfg, "noop_opponents", False):
+            diff_label = "noop"
+        elif self.cfg.opponent_difficulty:
+            diff_label = self.cfg.opponent_difficulty.value
+        else:
+            diff_label = "campaign"
 
         entry: Dict[str, Any] = {
             "timestamp": self._start_dt.isoformat() if self._start_dt else None,
@@ -238,7 +242,13 @@ class TrainingLogger:
                 "clip_range": self.cfg.clip_range,
                 "ent_coef": self.cfg.ent_coef,
                 "vf_coef": self.cfg.vf_coef,
-                "shaping_weight": self.cfg.shaping_weight,
+                "territory_weight": self.cfg.territory_weight,
+                "opponent_weight": self.cfg.opponent_weight,
+                "income_weight": self.cfg.income_weight,
+                "truncation_penalty": self.cfg.truncation_penalty,
+                "invalid_action_penalty": self.cfg.invalid_action_penalty,
+                "time_cost": self.cfg.time_cost,
+                "opponent_income_tax": self.cfg.opponent_income_tax,
             },
             "levels": self.cfg.level_indices,
             "difficulty": diff_label,

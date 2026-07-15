@@ -41,7 +41,6 @@ pip install -r requirements.txt
 Start the Flask development server:
 
 ```bash
-cd antiyoy_py
 source .venv/bin/activate
 python web/app.py
 ```
@@ -59,7 +58,6 @@ And the visual test are available at `http://localhost:5000/unit_tests`
 
 ### Run all tests:
 ```bash
-cd antiyoy_py
 source .venv/bin/activate
 pytest tests/ -v
 ```
@@ -84,7 +82,6 @@ pytest tests/visual/test_split_province.py::test_split_province_A -v
 
 Generate coverage report (terminal output):
 ```bash
-cd antiyoy_py
 source .venv/bin/activate
 pytest tests/ --cov=core --cov=save_load --cov=players --cov=commands --cov=visibility --cov=ai --cov-report=term -v
 ```

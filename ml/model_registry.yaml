@@ -14,3 +14,16 @@ models:
       Flat observation encodes tile ownership, unit presence, and
       economy state.  Action space: N^2 move + N*7 build + 1 end-turn.
       Reward shaping based on territory and economy differential.
+
+  max_map_action_space:
+    name: max_map_action_space
+    description: >
+      MLP policy (MlpPolicy) with action masking via sb3-contrib, using a
+      fixed action space sized to the largest campaign map
+      (action_space_hexes=384) so a single model can play every level
+      regardless of the maps it trained on.  Reworked self-relative reward:
+      per-step shaping on the deltas of the agent's own ownership percentage
+      and economy (4*farms - trees), measured against its previous state
+      rather than opponents; truncation penalised as heavily as a loss.
+      Trained via a manual level-by-level curriculum with win-rate early
+      stopping and resume-from-checkpoint.

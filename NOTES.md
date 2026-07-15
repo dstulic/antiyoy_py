@@ -348,35 +348,280 @@ After every session, a summary block is printed:
 ========================================================
 ```
 
-## Dependencies
+## Training run history
+
+#### "First Win" — first working model (success)
+
+Our first model that reliably wins games, archived as `final_models/first_approach_20260327_040810.zip` (`display_name: "First Win"`). Training setup:
+
+- **Algorithm**: MaskablePPO, MlpPolicy
+- **Levels**: 0-2 (campaign difficulty = easy), 8 parallel envs on CPU
+- **Action space**: auto-detected from the training levels (max 66 hexes → action space of 4,819)
+- **Hyperparameters**: `lr=3e-4`, `n_steps=2048`, `batch_size=256`, `n_epochs=5`, `gamma=0.99`, `gae_lambda=0.95`, `clip_range=0.2`, `ent_coef=0.01`, `vf_coef=0.5`, `shaping_weight=0.1`
+- **Budget**: 10M timesteps (completed: 10,010,624)
+- **Duration**: ~1h 37m (5,836s) on an Apple M4 Pro at roughly 1,700 FPS
+
+Because the action space was sized to levels 0-2, this model can only play maps with ≤66 hexes.
+
+#### Expanded action space retrain (failed)
+
+To lift the map-size restriction, we retrained with the *same logic* but an expanded, fixed action space (`action_space_hexes=384`, the max across all campaign levels → action space of 150,145) on levels 0-10, targeting 100M timesteps.
+
+- **Duration**: ~20h 5m (72,293s), interrupted at 16,007,168 / 100,000,000 timesteps
+- **Result**: dead in the water — the model never won a single game
+
+**Why it failed**: the run collapsed into a local minimum with no path out.
+
+- `eval/mean_reward` stayed pinned at ~-0.495 (every eval episode truncated; zero wins)
+- `train/entropy_loss` collapsed from ~-3.0 early on to ~-1.4 (exploration died)
+- `value_loss` and `policy_gradient_loss` fell to near zero — the value function had simply learned to predict -0.5 everywhere, leaving no learning signal
+- The 31x larger action space (150,145 vs 4,819) dropped throughput from ~1,700 FPS to ~220 FPS, so 20 hours only bought ~16M steps
+- The unchanged `ent_coef=0.01` and tiny `shaping_weight=0.1` gave nowhere near enough exploration pressure or intermediate signal to escape the truncation trap in such a large action space on harder/larger maps
+
+Takeaway: expanding the action space and the level range simultaneously, without also increasing exploration and reward shaping, produced a model with no wins after 20 hours. See the action-space-and-reward-strategy plan for the follow-up approach (train small first, then expand via weight surgery, plus reward tuning).
+
+---
+
+## Phase: Reward rework and manual curriculum
+
+Following the failed retrain above, the reward function was reworked and a manual, level-by-level curriculum workflow was added.
+
+### Reworked reward function (`ml/reward.py`)
+
+The reward is a sparse terminal signal with **self-relative** per-step shaping — every shaping term is measured against the agent's *own previous state*, never against opponents. This is near potential-based: the per-step deltas telescope to `final - initial` over an episode, so total shaping is bounded, doesn't distort the optimal policy, is low variance, and still captures opponent pressure indirectly (losing hexes/income yields a negative delta).
+
+Two orthogonal shaping signals:
+
+| Signal | Formula | Notes |
+|---|---|---|
+| Territory | `territory_weight * (pct_t - pct_{t-1}) / 100` | `pct = agent_hexes / total_hexes`. Map-normalised to [0,100]. Opponents expanding into neutral land does not move it — only gaining/losing your own hexes does. |
+| Economy | `income_weight * (economy_t - economy_{t-1})` | `economy = income - hex_count = 4*farms - trees`. The base +1/hex cancels (no double-counting with territory); unit upkeep excluded (military not punished); per-object values are constants so the signal is map-size invariant. |
+
+Terminal reward overrides shaping:
+
+| Outcome | Reward |
+|---|---|
+| Win | `+1.0` |
+| Loss (opponent wins) | `-1.0` |
+| Truncation (max turns/steps, no winner) | `-1.0` (configurable) |
+
+Truncation is penalised as heavily as a loss so stalling to run out the clock is no better than losing — this removes the stall-to-truncation local minimum that killed the previous run.
+
+Defaults: `territory_weight=0.5`, `income_weight=0.004` (a farm ≈ `+0.016`, one hex on the level-0 map ≈ `+0.025`), both an order of magnitude below the `±1.0` terminal so shaping guides without drowning the win/loss signal. `income_scale` and reward clipping were considered and dropped — `scale` is redundant with `income_weight`, and the worst realistic single-step swing (~0.15) is already well under the terminal.
+
+Design decisions that were rejected: opponent-differential shaping (comparing territory/economy against other players) was rejected as noisy — opponent metrics swing wildly turn to turn, and early game a fast-starting opponent makes the differential a demoralising moving target.
+
+### Configurable penalties and success info
+
+- `AntiyoyEnv` now takes `invalid_action_penalty` (default `0.0`): the old hardcoded `-0.01` for invalid/failed actions is gone, since invalid actions are already wasted steps.
+- `env._make_info()` now emits `info["is_success"]` (= agent won), which sb3's eval collects into its success buffer to compute win rate.
+
+### Manual curriculum workflow (win-rate early stop + resume)
+
+Rather than a single long run or an automated driver, training now proceeds level by level under manual control. Two `ml/train.py` features enable this:
+
+- **`--early-stop`**: a `WinRateEarlyStop` eval callback logs `eval/win_rate` (from `is_success`) and stops training once the win rate stays at/above `--win-rate-threshold` (default `0.6`) for `--early-stop-patience` consecutive evals (default `3`).
+- **`--resume PATH`**: loads a saved checkpoint, re-attaches it to the (possibly different) `--levels`, and continues with `reset_num_timesteps=False`. Resume requires a matching `--action-space-hexes`; the fixed default of 384 (max across all campaign levels) guarantees this across every level, so a model trained on small maps can be continued on any larger level without reshaping the action space.
+
+Typical flow:
+
+```bash
+# 1. Learn level 0 until it reliably wins
+python -m ml.train --levels 0 --early-stop
+
+# 2. Continue the same model on level 1
+python -m ml.train --resume ml_models/antiyoy_final --levels 1 --early-stop
+
+# 3. Consolidate across levels seen so far
+python -m ml.train --resume ml_models/antiyoy_final --levels 0 1 2 --early-stop
+```
+
+New CLI flags: `--territory-weight`, `--income-weight`, `--truncation-penalty`, `--invalid-action-penalty`, `--ent-coef`, `--resume`, `--early-stop`, `--win-rate-threshold`, `--early-stop-patience` (the old `--shaping-weight` was removed). `TrainingLogger` now records `territory_weight`/`income_weight` in place of `shaping_weight`.
+
+An automated curriculum driver (looping over levels with periodic consolidation) is intentionally deferred until this manual flow is proven.
+
+---
+
+## Phase: Curriculum progress and the level-5 wall
+
+### Levels 0–4: solved
+
+Using the reworked reward + resume-from-checkpoint chain, the model was trained level by level and **successfully beat levels 0 through 4**, with each solved level promoted to its own checkpoint (`ml_models/level_00.zip` … `level_04.zip`) and win stats recorded to `model_win_stats.csv`. The wins are slow and defensive (128 / 185 / 74 / 325 / 360 turns vs the built-in balancer AI's 83 / 43 / 43 / 77 / 98) — the agent turtles into heavy defense and grinds the game out rather than closing quickly.
+
+Note on "solved": for levels ~3+ the training/eval turn cap (200) is shorter than the agent needs to actually win (its recorded wins take 325–360 turns), so `eval/win_rate` stayed ~0 during training and the levels were **promoted on budget-exhaustion, not early-stop**. The recorded wins come from the separate, more generous 400-turn stat playthrough (`--stat-max-turns`). Combined with `gamma=0.99` over ~4,000-step episodes (~20 agent-steps/turn), the terminal win reward is discounted to ≈0 by the time it reaches early-game decisions (`0.99^4000 ≈ 0`), so the opening is learned almost entirely from the dense shaping, not from reaching a win.
+
+### Level 5: the wall (aggressive-opening problem)
+
+Level 5 is where the chain stalled. It's a **large 100-hex map**: `red` (balancer AI, *easy*) starts dominant (42 hexes — 1 city, 9 farms, 3 towers, but choked by 27 tree hexes), the agent (`aqua`) starts tiny (6 hexes, 10 gold), and there are **52 neutral gray hexes** to grab. It is winnable and not hard *for a human*, but requires **quick expansion into the neutral land in the opening turns** plus economy build-up to snowball past the tree-choked red — exactly the behaviour the current turtle policy does not have.
+
+The agent could not learn it: across a full 1M-step run (and a subsequent 2M-step run with modified params), `rollout/success_rate` and `eval/win_rate` stayed pinned at **0** — the agent never won level 5 even once, so there was no win signal to reinforce. It either stalls to the turn cap or loses. The core difficulty is **strategy discovery in the opening**: if the agent doesn't grab the right gray hexes in roughly the first ~20 turns it's stuck in a long, slow farming game it can't win, and simply giving it more turns reinforces slow play rather than teaching the fast opening. (The built-in balancer AIs *also* lose level 5 at every difficulty, so there's no reference win to calibrate a turn cap against — `_turn_cap_for_level` falls back to the 200 floor.)
+
+Level 6 is genuinely very hard and is **skipped for now**.
+
+### Current experiment params (level 5, resumed from `level_04`)
+
+The changes target the *shaping* (what's actually visible to early-game decisions) and *exploration*, rather than the terminal reward or turn budget:
+
+| Param | Curriculum default | Level-5 experiment | Rationale |
+|---|---|---|---|
+| `gamma` | `0.99` | `0.97` | More myopic → weights immediate territory/economy shaping over near-invisible distant terminal reward, sharpening the "expand now" incentive. |
+| `territory_weight` | `0.5` | `1.0` | Make land-grabbing the loudest, least-discounted signal. |
+| `truncation_penalty` | `-1.0` | `0.0` | On a level it can't yet win, a flat −1 gives no gradient; crediting accumulated expansion lets it climb toward wins. (Trade-off: risks a comfortable no-win "expand-and-survive" equilibrium.) |
+| `ent_coef` | `0.02` | `0.05` | More exploration to break the confident turtle prior inherited from levels 0–4 and discover the aggressive opening. |
+| `timesteps` | `1M`/level | `2M`(+more) | More cycles to find and reinforce a win. |
+| turn cap | 200 | 200 (unchanged) | The bottleneck is discovery, not horizon — more turns would reinforce slow play. |
+
+`gamma` was wired through as a CLI passthrough (`ml.train` and `tools.curriculum_train`) and, like `ent_coef`, is re-applied on `--resume` so it isn't silently restored from the checkpoint. These are treated as an **experiment override, not a new default** — objective knobs (`gamma`, reward weights, truncation) should stay fixed across the curriculum, while budget/capacity knobs (turn/step caps, timesteps, exploration) may scale with level complexity.
+
+**Status / signal to watch**: reward is trending upward but `success_rate` is still 0. The metric that indicates the fix is working is `rollout/success_rate` lifting off zero (ideally with `ep_len_mean` dropping = learning to close quickly). If more cycles still yield zero wins, the bottleneck is exploration/discovery, not budget — next levers would be a higher `ent_coef` or restoring a mild negative truncation so "survive forever" stops being free.
+
+### Level 5 failed again
+
+The model never learned how to win level 5.
+
+### Diagnosis: the end-turn / opponent-growth exploit
+
+A behaviour diagnostic on the stalled level-5 runs showed the agent barely ever *ended its turn* — it spammed thousands of move commands per turn and cycled the same actions. Root cause: with `opponent_weight > 0`, the opponent-decline term penalised **red's autonomous expansion on red's own turn** (which the agent can't control), and that penalty was folded into the *end-turn step's* reward (shaping was computed *after* `_advance_opponents`). So the agent learned the degenerate optimum of **never ending its turn** to avoid ever paying for red's growth.
+
+### Fixes applied (reward/step mechanics)
+
+Three orthogonal fixes, all opt-in via CLI (defaults unchanged so prior behaviour is preserved):
+
+1. **Shaping is computed on the agent's own turn only.** In `env.step`, on an end-turn we now snapshot the shaping delta *before* `_advance_opponents`, then call `reward_calc.sync_baseline(...)` afterwards to absorb the opponents' turn deltas into the baseline without emitting reward. The opponent's autonomous land-grab is therefore no longer attributed to the agent — it only shows up through the terminal loss if red actually reaches 80%. (`RewardCalculator.sync_baseline` is a no-op on the base class; `DefaultRewardCalculator` re-snaps `_prev_agent_hexes/_prev_opp_hexes/_prev_economy`.)
+2. **Per-step time cost** (`--time-cost`, default `0.0`): a small constant subtracted from *every* step reward (including invalid/failed actions). Makes long games and per-turn action churn cost something, nudging toward decisive play. Try `~0.002`.
+3. **Invalid-action penalty** (`--invalid-action-penalty`, already present, default `0.0`): set `> 0` (e.g. `0.01`) so spamming illegal/failed actions is penalised rather than free.
+
+### Handicap: `noop` opponents (curriculum rung 0)
+
+To get the agent its **first** level-5 win (so there's a win signal to reinforce), added a passive-opponent mode instead of modifying the map (rejected: high effort, low long-term value) or taxing the opponent's money (rejected: fiddly to make it actually starve red given its income of 48 — income timing is inside the AI turn).
+
+`--difficulty noop` makes every opponent **end its turn immediately with no moves** (`env._advance_opponents_noop` submits an `EndTurnCommand` per opponent via the normal executor path — income still accrues, but red never builds or expands). On level 5 this freezes red at its starting 42 hexes: the agent can grab the 52 neutral hexes freely and then grind red's static towers, which is very likely winnable → a real win signal.
+
+This is deliberately the **first rung of a difficulty ladder** the curriculum can climb: `noop → easy → average → hard`, resuming the checkpoint at each rung. All knobs are passthrough in `tools/curriculum_train.py` (`--difficulty`, `--time-cost`, `--territory-weight`, `--opponent-weight`, `--income-weight`, `--truncation-penalty`, `--invalid-action-penalty`).
+
+Example (bootstrap level 5 against a passive opponent, resuming level 4):
 
 ```
-gymnasium
-stable-baselines3
-sb3-contrib
-tensorboard
-torch (installed as SB3 dependency)
-psutil
-codecarbon (optional — Linux only, skipped on macOS)
-pyyaml
+python -m ml.train --levels 5 --difficulty noop --resume ml_models/level_04.zip \
+  --time-cost 0.002 --invalid-action-penalty 0.01 --opponent-weight 1.0 \
+  --early-stop --ent-coef 0.05 --gamma 0.97 --timesteps 2000000 \
+  --max-turns 200 --eval-max-turns 200
 ```
 
-## Files Modified from Base Game
+### `noop` bootstrap worked — then two false starts on `easy`
 
-- `core/enums.py` -- added `EntityType.AI_ML`
-- `ai/ai_manager.py` -- added `MlAI` lazy loading and `AI_ML` entity handling
-- `core/core_utils.py` -- moved dicts to module-level constants
-- `core/ruleset.py` -- moved dicts to class-level constants
-- `core/province.py` -- switched WaveWorker to deque
-- `web/app.py` -- `_apply_entity_difficulties` swaps entity type to `AI_ML` when "ml" selected; model-existence validation in `_assert_all_ai_difficulties_set`
-- `web/static/js/campaign.js` -- added "ML Model" option to AI selector dropdown
-- `ml/ml_ai.py` -- derives `n_hexes` from loaded model's action space to avoid mask mismatch
-- `ml/env.py` -- added `max_steps` truncation (moved check to top of `step()`), `log_progress` diagnostic prints
-- `ml/train.py` -- `DiagnosticsCallback`, `TimedEvalCallback`, `make_eval_env`, parallel eval, device override, `TrainingLogger` integration, Ctrl+C handling with graceful SubprocVecEnv cleanup
-- `ml/config.py` -- added `eval_max_turns`, `eval_max_steps`, `n_eval_envs`, `no_eval`, `device_override`, `model_details`
-- `ml/training_logger.py` -- new: `ResourceMonitor`, `TrainingLogger`, CodeCarbon wrapper, TDP fallback, model archival, session log writing
-- `ml/model_registry.yaml` -- new: named approach definitions (key, name, description)
-- `training_sessions.json` -- new: append-only session log (pretty-printed JSON array)
-- `requirements.txt` -- added ML dependencies, `psutil`, `codecarbon`, `pyyaml`
-- `tests/test_enums.py` -- updated for `AI_ML`
-- `tests/test_rng_state.py` -- fixed test for duplicate level codes
+The `noop` run **early-stopped as a win** (red frozen at 42 hexes; the agent expands and grinds it down). That checkpoint was promoted to `ml_models/level_05_noop.zip` — the first level-5 win the model ever produced. But resuming it against real `easy` failed twice, each failure teaching something:
+
+1. **`time_cost=0.002` was ~10× too large.** Over a ~5,000-step game it sums to ~−10, dwarfing the ±1 terminal and the ~0.1-scale territory shaping (`0.5/384 ≈ 0.0013` per hex). Eval `mean_reward` of −10.9 decomposed as `4952 steps × 0.002 (−9.9)` + `−1` truncation — i.e. ~91% of the reward *was* the time cost, so the dominant gradient became "make the episode shorter," not "win." A per-step cost must be sized so a **whole game** costs O(1): use `~0.0002` (or `0`). The churn it was meant to fight is already addressed structurally by the shaping-before-opponents fix.
+2. **With `time_cost=0`, it reverted to stalling.** Reward flatlined at −0.994 (just the −1 truncation) while `ep_len_mean` exploded to ~10k steps (400 turns × ~25 steps) — the agent wandered to the turn cap with **net-zero shaping** (no expansion). Removing the cost removed the only pressure against free within-turn wandering. `fps` collapsed 100 → 18.
+
+Both confirmed the **`noop → easy` jump is a cliff**: the passive-win policy learned "expand into uncontested land," which has no answer to a red that contests the opening, and with no reachable win there's no gradient to climb.
+
+> **Measurement caveat:** across a reward-function change (adding `time_cost`, changing `gamma`), eval `mean_reward` is on a *new scale* and is not comparable to earlier runs. Judge "did it forget / regress" by **behaviour** and `success_rate`, not raw reward.
+
+### On resume and "forgetting"
+
+`model.load()` restores the full policy **and** value nets (and optimizer state), so at timestep 0 the resumed model plays exactly like the checkpoint — nothing is wiped. But nothing *protects* those weights either; several forces push the policy off them fast: (a) a high `ent_coef` literally rewards a more random policy (de-commits the learned behaviour), (b) the **critic is stale** for the new setting → wrong/noisy advantages → large destabilising early updates, (c) **distribution shift** puts the old policy in states it never saw. Levers to retain more: lower `ent_coef` on resume, lower LR, cap update size with `target_kl`, and — most importantly — **make each curriculum step small** so the distribution shift is small.
+
+### Handicap v2: opponent **income tax** (rejected the delay; the money-tax works)
+
+A *turn-delay* handicap (opponents idle for the first N turns, then activate) was tried and rejected: the opponent banks N turns of unspent income and dumps a huge army the instant it wakes, defeating the purpose.
+
+Instead, `EconomicsManager` now supports an **income tax**: at turn-start income application it withholds a fraction of each opponent's *positive income* (consumption untouched, so a starved opponent can even go upkeep-negative). It's inert by default (`income_tax_rate=0.0`) so real games are unaffected; the ML env installs the rate per episode, **exempting the agent's colour**. Exposed as `--opponent-income-tax` (env: `opponent_income_tax`).
+
+Effectiveness on level 5 (red income 48, unit cost ~10), measured with an idle agent — red hexes reached after N turns:
+
+| tax | @5 turns | @10 | @15 | effect |
+|---|---|---|---|---|
+| 0.0 | 80 | 80 | 80 | full strength (wins ~turn 5 vs idle agent) |
+| 0.4 | 80 | 80 | 80 | **no meaningful handicap** |
+| 0.8 | 53 | 68 | 80 | clearly slowed |
+| 0.99 | 43 | 43 | 43 | frozen (≈ `noop`) |
+
+Because red's income is ~5× a unit's cost, it takes a **big** tax to bite: the effective band is ~`0.8–0.99`; anything ≤ ~0.7 is effectively full-strength red. So difficulty rungs should cluster in the high band, not spread linearly to 0.
+
+### Approach: **mixed-difficulty (domain-randomised) tax**, not a sequential ladder
+
+Rather than annealing the tax across sequential resumes (which triggers the forgetting above at every step), train against a **variety of taxed opponents at once**. `--opponent-income-tax` accepts several values and each parallel env is **pinned to one** (stratified, in the env factory via `tax_for_rank`), so *every* rollout batch spans the full spread. The agent always "tastes victory" on the high-tax envs (persistent win signal → can't drift away from winning) while the low-tax envs pressure it to generalise. This dissolves the catastrophic-forgetting problem because all difficulties are permanently in the training distribution.
+
+Design choices:
+- **Stratified per-env, not per-episode.** Episodes run thousands of steps, so a rollout contains only a handful of episodes; per-episode sampling could miss whole difficulty bands in a batch. Pinning env `i` to `tax[i]` guarantees coverage every update.
+- **Include `0.0` (real `easy`) in the set.** The deployment target is then *in-distribution* — no separate "anneal to 0" step; when the agent wins the `0.0` envs it has genuinely solved level 5.
+- **No difficulty signal in the observation** (agent can't see the tax). We want one robust difficulty-agnostic policy; the cost is a noisier critic (identical openings → different outcomes → lower `explained_variance`), which PPO tolerates.
+- Eval envs stratify 0-based across the same set (`--n-eval-envs` ≥ number of taxes to cover all), so `eval/win_rate` is a **blended** competence metric across the spread.
+
+Current experiment (resumes the `noop` win; `time_cost` recalibrated; `ent_coef` lowered for retention):
+
+```
+python -m ml.train --levels 5 --difficulty easy \
+  --opponent-income-tax 0.99 0.95 0.9 0.85 0.8 0.7 0.5 0.0 \
+  --resume ml_models/level_05_noop.zip --model-details max_map_action_space \
+  --n-envs 8 --n-eval-envs 8 \
+  --time-cost 0.0002 --invalid-action-penalty 0.01 --opponent-weight 1.0 \
+  --early-stop --ent-coef 0.03 --gamma 0.97 --timesteps 3000000 \
+  --max-turns 400 --eval-max-turns 400
+```
+
+### Replay-based behaviour analysis (the tax-mixed model)
+
+After the mixed-difficulty run "succeeded," we generated `.replay` files and watched them
+back rather than trusting stats alone. Tooling added for this:
+
+- `AntiyoyEnv(record_replay=True)` keeps the `history_manager` attached (it's stripped
+  during training/eval for speed) so per-event snapshots can be serialised with
+  `save_replay` at game end.
+- `tools/model_replay.py` plays the model on a level/tax and writes qualifying games to
+  `replays/`. `--want {any,win,loss}` + `--min-own` filter which games qualify;
+  `--select {first,min-turns,max-turns,min-max,all}` picks which qualifying games to keep.
+
+Per-tax outcomes we captured on level 5 (`antiyoy_final.zip`), which quantify the two
+failure modes:
+
+| tax | representative games | read |
+|---|---|---|
+| 0.90 | 10 wins, 49–120 turns | **2.4× turn spread on a trivial opponent** → no consistent aggressive opening line |
+| 0.85 | mixed; loss @27t/17% own | loses when it can't out-expand a slightly stronger red |
+| 0.80 | loss @14t/13%, win @164t/80% | either dies in the opening or grinds a marathon economic win |
+| 0.75 | losses 10–18t/13–20%, wins @211 & 254t | **no middle ground**: fast death or a very long turtle win |
+
+### Diagnosis: both players win by *stumbling*, not by strategy
+
+Watching the replays, our agent plays at roughly the level of the built-in **`easy`** AI —
+the only reason `easy` wins more often is that it **starts with more funds**, not better
+play. In quality both are equally poor: the game's outcome is essentially the product of
+two agents shuffling units around semi-randomly until one happens to cross 80%.
+
+Concrete behavioural defects observed in our agent (the actionable list to attack next):
+
+1. **Doesn't clear trees aggressively.** Trees are left standing, spread/regrow, and
+   quietly drain province income — the economy bleeds instead of compounding. There is no
+   incentive in the current reward tying unit-moves to tree removal.
+2. **Builds strong units far too early, then wastes them.** It springs for expensive units
+   up front but never uses them to **attack towers / push into enemy territory** — they
+   wander the map like any cheap unit. Strength is bought but not converted into
+   territory, so the up-front economic hit buys nothing.
+3. **Only occasional farms.** Economy growth is sporadic rather than a deliberate
+   compounding plan, so it can't fund sustained expansion (matches the "marathon or bust"
+   split above).
+4. **Only occasional towers.** Defensive structure is incidental, not placed to hold or
+   contest key hexes.
+5. **Movement is effectively random.** Units are moved to clear a tree, grab a neutral
+   hex, grab an enemy hex, or not moved at all — with no coherent objective per unit or per
+   turn. The "esoteric" look is exactly this: locally-valid actions with no strategy
+   stringing them together.
+
+**Implication for reward/curriculum design.** The current shaping rewards *net territory
+and economy state*, which a random walk can drift into given enough turns — so a
+random-ish policy still climbs reward and "wins" by attrition. That's why reward trends up
+while play quality doesn't. The signal is too coarse to distinguish *deliberate* from
+*accidental* progress. Directions this analysis points to (not yet implemented):
+
+- Reward **tree removal** directly (income-preserving actions), so the economy stops
+  bleeding.
+- Reward **using strength**: credit for tower kills / capturing *defended* hexes, not just
+  any hex, so buying strong units only pays off when they're actually pushed into the
+  enemy.
+- Tie the up-front cost of strong units to a payoff horizon (`gamma`/shaping) so early
+  over-investment without use is discouraged.
+- Consider **per-unit / per-turn objective shaping** rather than only board-state deltas,
+  to penalise net-zero wandering that the current potential-based shaping treats as free.

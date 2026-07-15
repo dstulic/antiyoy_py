@@ -11,6 +11,7 @@ import argparse
 import os
 import sys
 from pathlib import Path
+from typing import Optional
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -32,14 +33,64 @@ def _parse_args() -> TrainConfig:
                         help="Inclusive range of levels, e.g. --level-range 0 10. "
                              "Overrides --levels.")
     parser.add_argument("--difficulty", type=str, default="campaign",
-                        choices=["campaign"] + [d.value for d in Difficulty],
+                        choices=["campaign", "noop"] + [d.value for d in Difficulty],
                         help="Opponent AI difficulty. 'campaign' (default) "
-                             "uses the level-appropriate difficulty.")
-    parser.add_argument("--n-envs", type=int, default=4)
+                             "uses the level-appropriate difficulty. 'noop' makes "
+                             "opponents passive (they end every turn without "
+                             "moving) — the first rung of the curriculum ladder.")
+    parser.add_argument("--n-envs", type=int, default=8)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--lr", type=float, default=3e-4)
-    parser.add_argument("--max-turns", type=int, default=500)
-    parser.add_argument("--shaping-weight", type=float, default=0.1)
+    parser.add_argument("--ent-coef", type=float, default=0.01,
+                        help="Entropy coefficient (exploration; default: 0.01)")
+    parser.add_argument("--gamma", type=float, default=0.99,
+                        help="Discount factor (default: 0.99). Lower values make "
+                             "the agent more myopic, weighting near-term shaping "
+                             "over distant terminal rewards.")
+    parser.add_argument("--max-turns", type=int, default=200)
+    parser.add_argument("--territory-weight", type=float, default=0.5,
+                        help="Weight on the per-step ownership-percentage delta "
+                             "(default: 0.5)")
+    parser.add_argument("--opponent-weight", type=float, default=0.0,
+                        help="Weight on the per-step opponent ownership-percentage "
+                             "DECLINE (rewards shrinking the enemy / penalises "
+                             "letting them grow; default: 0.0 = off)")
+    parser.add_argument("--income-weight", type=float, default=0.004,
+                        help="Weight on the per-step economy (4*farms-trees) "
+                             "delta (default: 0.004)")
+    parser.add_argument("--truncation-penalty", type=float, default=-1.0,
+                        help="Terminal reward when the episode truncates with no "
+                             "winner (default: -1.0)")
+    parser.add_argument("--invalid-action-penalty", type=float, default=0.0,
+                        help="Penalty magnitude for invalid/failed actions "
+                             "(default: 0.0)")
+    parser.add_argument("--time-cost", type=float, default=0.0,
+                        help="Constant magnitude subtracted from every step's "
+                             "reward; penalises long games and per-turn action "
+                             "churn (default: 0.0 = off)")
+    parser.add_argument("--opponent-income-tax", type=float, nargs="+",
+                        default=[0.0], metavar="RATE",
+                        help="Fraction(s) of each opponent's positive per-turn "
+                             "income withheld before it hits their treasury "
+                             "(0.0=off, 1.0=keep nothing). Opponents keep their "
+                             "normal AI logic but a weaker economy. Pass ONE "
+                             "value for a constant handicap, or SEVERAL for "
+                             "mixed-difficulty training (each parallel env is "
+                             "pinned to one value, so every batch spans the "
+                             "range: the agent tastes wins at high tax and is "
+                             "challenged at low tax). The agent's income is "
+                             "always exempt (default: 0.0 = off).")
+    parser.add_argument("--resume", type=str, default=None, metavar="PATH",
+                        help="Resume training from a saved model checkpoint "
+                             "(requires matching --action-space-hexes).")
+    parser.add_argument("--early-stop", action="store_true",
+                        help="Stop training once the win rate is sustained above "
+                             "--win-rate-threshold for --early-stop-patience evals.")
+    parser.add_argument("--win-rate-threshold", type=float, default=0.6,
+                        help="Win-rate target for early stopping (default: 0.6)")
+    parser.add_argument("--early-stop-patience", type=int, default=3,
+                        help="Consecutive evals at/above the win-rate threshold "
+                             "required to early-stop (default: 3)")
     parser.add_argument("--log-dir", type=str, default="ml_logs")
     parser.add_argument("--model-dir", type=str, default="ml_models")
     parser.add_argument("--device", type=str, default=None,
@@ -47,8 +98,8 @@ def _parse_args() -> TrainConfig:
                         help="Override device selection (default: auto-detect)")
     parser.add_argument("--no-eval", action="store_true",
                         help="Disable evaluation callback (useful for short runs)")
-    parser.add_argument("--eval-max-turns", type=int, default=50,
-                        help="Max turns per eval episode (default: 50)")
+    parser.add_argument("--eval-max-turns", type=int, default=200,
+                        help="Max turns per eval episode (default: 200)")
     parser.add_argument("--eval-max-steps", type=int, default=5000,
                         help="Max steps per eval episode (default: 5000)")
     parser.add_argument("--n-eval-envs", type=int, default=5,
@@ -56,9 +107,17 @@ def _parse_args() -> TrainConfig:
     parser.add_argument("--model-details", type=str, default="first_approach",
                         help="Key into ml/model_registry.yaml describing "
                              "this approach (default: first_approach)")
+    parser.add_argument("--action-space-hexes", type=int, default=None,
+                        help="Fix action space to support maps up to N hexes "
+                             "(default: 384 = max campaign level). Override to "
+                             "shrink for faster training on small maps only.")
     args = parser.parse_args()
 
-    difficulty = None if args.difficulty == "campaign" else Difficulty(args.difficulty)
+    noop_opponents = args.difficulty == "noop"
+    if args.difficulty in ("campaign", "noop"):
+        difficulty = None
+    else:
+        difficulty = Difficulty(args.difficulty)
     levels = list(range(args.level_range[0], args.level_range[1] + 1)) if args.level_range else args.levels
 
     cfg = TrainConfig(
@@ -66,11 +125,24 @@ def _parse_args() -> TrainConfig:
         total_timesteps=args.timesteps,
         level_indices=levels,
         opponent_difficulty=difficulty,
+        noop_opponents=noop_opponents,
+        opponent_income_tax=args.opponent_income_tax,
         n_envs=args.n_envs,
         seed=args.seed,
         learning_rate=args.lr,
+        ent_coef=args.ent_coef,
+        gamma=args.gamma,
         max_turns=args.max_turns,
-        shaping_weight=args.shaping_weight,
+        territory_weight=args.territory_weight,
+        opponent_weight=args.opponent_weight,
+        income_weight=args.income_weight,
+        truncation_penalty=args.truncation_penalty,
+        invalid_action_penalty=args.invalid_action_penalty,
+        time_cost=args.time_cost,
+        resume_path=args.resume,
+        early_stop=args.early_stop,
+        win_rate_threshold=args.win_rate_threshold,
+        early_stop_patience=args.early_stop_patience,
         log_dir=args.log_dir,
         model_dir=args.model_dir,
         device_override=args.device,
@@ -79,8 +151,21 @@ def _parse_args() -> TrainConfig:
         eval_max_steps=args.eval_max_steps,
         n_eval_envs=args.n_eval_envs,
         model_details=args.model_details,
+        **({"action_space_hexes": args.action_space_hexes} if args.action_space_hexes else {}),
     )
     return cfg
+
+
+def tax_for_rank(taxes, rank: int) -> float:
+    """Pick one income-tax value for a given env rank (stratified, wrapping).
+
+    With a single-element list this is a constant handicap; with several the
+    parallel envs are spread across the values so every rollout batch contains
+    the whole difficulty range (persistent win signal + generalisation).
+    """
+    if not taxes:
+        return 0.0
+    return float(taxes[rank % len(taxes)])
 
 
 def make_env(cfg: TrainConfig, rank: int = 0):
@@ -93,8 +178,18 @@ def make_env(cfg: TrainConfig, rank: int = 0):
         env = AntiyoyEnv(
             level_indices=cfg.level_indices,
             opponent_difficulty=cfg.opponent_difficulty,
+            noop_opponents=cfg.noop_opponents,
+            opponent_income_tax=tax_for_rank(cfg.opponent_income_tax, rank),
             max_turns=cfg.max_turns,
-            reward_calculator=DefaultRewardCalculator(shaping_weight=cfg.shaping_weight),
+            reward_calculator=DefaultRewardCalculator(
+                territory_weight=cfg.territory_weight,
+                opponent_weight=cfg.opponent_weight,
+                income_weight=cfg.income_weight,
+                truncation_penalty=cfg.truncation_penalty,
+            ),
+            action_space_hexes=cfg.action_space_hexes,
+            invalid_action_penalty=cfg.invalid_action_penalty,
+            time_cost=cfg.time_cost,
         )
         env = Monitor(env)
         env.reset(seed=cfg.seed + rank)
@@ -102,9 +197,13 @@ def make_env(cfg: TrainConfig, rank: int = 0):
     return _init
 
 
-def make_eval_env(cfg: TrainConfig, rank: int = 0):
+def make_eval_env(cfg: TrainConfig, rank: int = 0, tax_rank: Optional[int] = None):
     """Return a callable that creates one AntiyoyEnv for evaluation,
-    using tighter turn/step limits to prevent runaway episodes."""
+    using tighter turn/step limits to prevent runaway episodes.
+
+    ``tax_rank`` selects which income-tax value this eval env is pinned to
+    (defaults to ``rank``); passing a 0-based index lets eval span the full
+    tax spread independently of the seed offset."""
     def _init():
         from ml.env import AntiyoyEnv
         from ml.reward import DefaultRewardCalculator
@@ -113,9 +212,21 @@ def make_eval_env(cfg: TrainConfig, rank: int = 0):
         env = AntiyoyEnv(
             level_indices=cfg.level_indices,
             opponent_difficulty=cfg.opponent_difficulty,
+            noop_opponents=cfg.noop_opponents,
+            opponent_income_tax=tax_for_rank(
+                cfg.opponent_income_tax, rank if tax_rank is None else tax_rank
+            ),
             max_turns=cfg.eval_max_turns,
             max_steps=cfg.eval_max_steps,
-            reward_calculator=DefaultRewardCalculator(shaping_weight=cfg.shaping_weight),
+            reward_calculator=DefaultRewardCalculator(
+                territory_weight=cfg.territory_weight,
+                opponent_weight=cfg.opponent_weight,
+                income_weight=cfg.income_weight,
+                truncation_penalty=cfg.truncation_penalty,
+            ),
+            action_space_hexes=cfg.action_space_hexes,
+            invalid_action_penalty=cfg.invalid_action_penalty,
+            time_cost=cfg.time_cost,
             # log_progress=True,
         )
         env = Monitor(env)
@@ -128,6 +239,7 @@ def train(cfg: TrainConfig) -> None:
     import time
     from datetime import datetime
 
+    import numpy as np
     import torch
     from sb3_contrib import MaskablePPO
     from sb3_contrib.common.maskable.callbacks import MaskableEvalCallback
@@ -185,6 +297,44 @@ def train(cfg: TrainConfig) -> None:
                 return result
             return True
 
+    class WinRateEarlyStop(TimedEvalCallback):
+        """Early-stops training once the eval win rate stays at/above a
+        threshold for a number of consecutive evaluations.
+
+        Win rate is derived from ``info['is_success']`` (populated by the env),
+        which sb3 collects into ``self._is_success_buffer`` during eval.
+        """
+
+        def __init__(self, *args, win_rate_threshold: float = 0.6,
+                     patience: int = 3, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.win_rate_threshold = win_rate_threshold
+            self.patience = patience
+            self._consec = 0
+
+        def _on_step(self) -> bool:
+            did_eval = self.eval_freq > 0 and self.n_calls % self.eval_freq == 0
+            result = super()._on_step()
+            if did_eval:
+                if self._is_success_buffer:
+                    win_rate = float(np.mean(self._is_success_buffer))
+                else:
+                    win_rate = 0.0
+                self.logger.record("eval/win_rate", win_rate)
+                if win_rate >= self.win_rate_threshold:
+                    self._consec += 1
+                else:
+                    self._consec = 0
+                print(f"[{_now()}] WIN_RATE {win_rate:.2f} "
+                      f"(threshold {self.win_rate_threshold:.2f}, "
+                      f"{self._consec}/{self.patience} consecutive)", flush=True)
+                if self._consec >= self.patience:
+                    print(f"[{_now()}] EARLY STOP: win rate >= "
+                          f"{self.win_rate_threshold:.2f} for {self.patience} "
+                          f"consecutive evals.", flush=True)
+                    return False
+            return result
+
     # Large discrete action spaces (N^2 + N*7 + 1) cause float32 softmax
     # rounding to violate PyTorch's strict Simplex check.
     torch.distributions.Distribution.set_default_validate_args(False)
@@ -199,7 +349,8 @@ def train(cfg: TrainConfig) -> None:
     eval_env = None
     if not cfg.no_eval:
         eval_env = SubprocVecEnv([
-            make_eval_env(cfg, cfg.n_envs + i) for i in range(cfg.n_eval_envs)
+            make_eval_env(cfg, cfg.n_envs + i, tax_rank=i)
+            for i in range(cfg.n_eval_envs)
         ])
 
     algo_cls = MaskablePPO
@@ -236,7 +387,24 @@ def train(cfg: TrainConfig) -> None:
             clip_range=cfg.clip_range,
         )
 
-    model = algo_cls(**model_kwargs)
+    if cfg.resume_path:
+        print(f"Resuming from checkpoint: {cfg.resume_path}")
+        model = algo_cls.load(cfg.resume_path, env=env, device=device)
+        model.set_env(env)
+        # load() restores ent_coef from the checkpoint; re-apply the configured
+        # value so it can be annealed across curriculum stages.
+        model.ent_coef = cfg.ent_coef
+        if isinstance(getattr(model, "ent_coef_tensor", None), torch.Tensor):
+            model.ent_coef_tensor = torch.tensor(
+                float(cfg.ent_coef), device=model.device
+            )
+        print(f"  ent_coef set to {cfg.ent_coef}")
+        # load() also restores gamma from the checkpoint; re-apply the configured
+        # value so the discount can be adjusted when resuming a curriculum stage.
+        model.gamma = cfg.gamma
+        print(f"  gamma set to {cfg.gamma}")
+    else:
+        model = algo_cls(**model_kwargs)
 
     callbacks = [
         DiagnosticsCallback(),
@@ -247,31 +415,62 @@ def train(cfg: TrainConfig) -> None:
         ),
     ]
     if eval_env is not None:
-        callbacks.append(TimedEvalCallback(
-            eval_env,
+        eval_kwargs = dict(
             best_model_save_path=os.path.join(cfg.model_dir, "best"),
             log_path=cfg.log_dir,
             eval_freq=max(cfg.eval_freq // cfg.n_envs, 1),
             n_eval_episodes=cfg.eval_episodes,
-            deterministic=True,
-        ))
+            # Stochastic eval: a greedy/argmax policy can trap itself repeating
+            # a non-terminating action (never ending its turn) and truncate at
+            # the step cap, reporting 0% win rate even when the sampled policy
+            # wins ~90% of training episodes. Sampling matches how the agent
+            # actually plays and makes the win-rate/early-stop signal real.
+            deterministic=False,
+        )
+        if cfg.early_stop:
+            callbacks.append(WinRateEarlyStop(
+                eval_env,
+                win_rate_threshold=cfg.win_rate_threshold,
+                patience=cfg.early_stop_patience,
+                **eval_kwargs,
+            ))
+        else:
+            callbacks.append(TimedEvalCallback(eval_env, **eval_kwargs))
 
     print(f"Training {cfg.algorithm} for {cfg.total_timesteps} timesteps")
-    diff_label = cfg.opponent_difficulty.value if cfg.opponent_difficulty else "campaign"
+    if cfg.noop_opponents:
+        diff_label = "noop"
+    elif cfg.opponent_difficulty:
+        diff_label = cfg.opponent_difficulty.value
+    else:
+        diff_label = "campaign"
     print(f"  levels={cfg.level_indices}  difficulty={diff_label}")
+    if any(t > 0 for t in cfg.opponent_income_tax):
+        spread = [tax_for_rank(cfg.opponent_income_tax, r) for r in range(cfg.n_envs)]
+        print(f"  opponent income tax: {cfg.opponent_income_tax}  "
+              f"(per-env: {spread})")
     print(f"  n_envs={cfg.n_envs}  lr={cfg.learning_rate}")
     if eval_env is not None:
         print(f"  eval: {cfg.n_eval_envs} envs, {cfg.eval_episodes} episodes, "
               f"max_turns={cfg.eval_max_turns}, max_steps={cfg.eval_max_steps}")
     else:
         print("  eval: disabled")
+    if cfg.early_stop:
+        print(f"  early stop: win_rate >= {cfg.win_rate_threshold} "
+              f"for {cfg.early_stop_patience} consecutive evals")
+    if cfg.resume_path:
+        print(f"  resuming from: {cfg.resume_path}")
 
     logger = TrainingLogger(cfg, device)
     logger.start()
 
     completed = False
     try:
-        model.learn(total_timesteps=cfg.total_timesteps, callback=callbacks)
+        model.learn(
+            total_timesteps=cfg.total_timesteps,
+            callback=callbacks,
+            reset_num_timesteps=not cfg.resume_path,
+        )
         completed = True
     except KeyboardInterrupt:
         print("\n\nTraining interrupted by user (Ctrl+C).")

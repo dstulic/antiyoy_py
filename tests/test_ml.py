@@ -6,6 +6,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
+import pytest
 
 from core.game_state import GameState
 from core.enums import (
@@ -202,7 +203,7 @@ class TestDefaultRewardCalculator:
         from ml.reward import DefaultRewardCalculator
 
         gs = _small_game_state()
-        calc = DefaultRewardCalculator(shaping_weight=0.0)
+        calc = DefaultRewardCalculator(territory_weight=0.0, income_weight=0.0)
         calc.reset(gs, HColor.RED)
 
         reward = calc.calculate(gs, HColor.RED, terminated=False, info={})
@@ -233,6 +234,129 @@ class TestDefaultRewardCalculator:
         reward = calc.calculate(gs, HColor.RED, terminated=True, info={})
         assert reward == -1.0
 
+    def test_terminal_truncation(self):
+        """Terminated with no winner (max turns/steps) -> truncation penalty."""
+        from ml.reward import DefaultRewardCalculator
+
+        gs = _small_game_state()  # game not ended -> get_winner() is None
+        calc = DefaultRewardCalculator(truncation_penalty=-1.0)
+        calc.reset(gs, HColor.RED)
+        reward = calc.calculate(gs, HColor.RED, terminated=True, info={})
+        assert reward == -1.0
+
+    def test_economy_shaping_on_farm(self):
+        """Building a farm raises economy (4*farms - trees) by 4."""
+        from ml.reward import DefaultRewardCalculator
+
+        gs = _small_game_state()
+        # income_weight=1.0 so the reward equals the raw economy delta;
+        # territory_weight=0.0 to isolate the economy signal.
+        calc = DefaultRewardCalculator(territory_weight=0.0, income_weight=1.0)
+        calc.reset(gs, HColor.RED)
+
+        placed = False
+        for hex in gs.hexes:
+            if (hex.color == HColor.RED and hex.piece is None
+                    and hex.get_province() is not None):
+                hex.piece = PieceType.FARM
+                placed = True
+                break
+        assert placed, "Expected an owned empty in-province hex to place a farm"
+
+        reward = calc.calculate(gs, HColor.RED, terminated=False, info={})
+        assert reward == 4.0
+
+    def test_opponent_decline_doubly_rewards_conquest(self):
+        """Taking an enemy hex raises own share AND lowers theirs, so with equal
+        territory/opponent weights a conquest is rewarded ~twice a neutral grab."""
+        from ml.reward import DefaultRewardCalculator
+
+        gs = _small_game_state()  # RED: 3 hexes, BLUE: 2 hexes, GRAY: 1 (total 6)
+        # territory_norm=1.0 makes the terms count raw hexes, isolating the ratio.
+        calc = DefaultRewardCalculator(
+            territory_weight=1.0, opponent_weight=1.0, income_weight=0.0,
+            territory_norm=1.0,
+        )
+        calc.reset(gs, HColor.RED)
+
+        # Conquer one BLUE (opponent) province hex: recolour it to the agent.
+        conquered = False
+        for hex in gs.hexes:
+            if hex.color == HColor.BLUE and hex.get_province() is not None:
+                hex.color = HColor.RED
+                conquered = True
+                break
+        assert conquered, "Expected a BLUE in-province hex to conquer"
+
+        reward = calc.calculate(gs, HColor.RED, terminated=False, info={})
+        # +1 own hex, -1 opponent hex, both weight 1.0 => 2 (double a neutral grab).
+        assert reward == pytest.approx(2.0)
+
+    def test_territory_norm_makes_hex_value_map_invariant(self):
+        """A single neutral-hex gain is worth territory_weight/territory_norm
+        regardless of the map's actual size."""
+        from ml.reward import DefaultRewardCalculator
+
+        gs = _small_game_state()
+        calc = DefaultRewardCalculator(
+            territory_weight=1.0, opponent_weight=0.0, income_weight=0.0,
+            territory_norm=384.0,
+        )
+        calc.reset(gs, HColor.RED)
+
+        # Agent gains one previously-neutral (GRAY, no province) hex.
+        grabbed = False
+        for hex in gs.hexes:
+            if hex.get_province() is None and hex.color == HColor.GRAY:
+                hex.color = HColor.RED
+                hex._province = next(iter(gs.provinces_manager.provinces))
+                grabbed = True
+                break
+        assert grabbed, "Expected a neutral hex to grab"
+
+        reward = calc.calculate(gs, HColor.RED, terminated=False, info={})
+        assert reward == pytest.approx(1.0 / 384.0)
+
+    def test_opponent_weight_off_by_default(self):
+        """opponent_weight defaults to 0, so the term is inert unless enabled."""
+        from ml.reward import DefaultRewardCalculator
+
+        gs = _small_game_state()
+        calc = DefaultRewardCalculator(territory_weight=0.0, income_weight=0.0)
+        calc.reset(gs, HColor.RED)
+
+        for hex in gs.hexes:
+            if hex.color == HColor.BLUE and hex.get_province() is not None:
+                hex.color = HColor.RED
+                break
+
+        reward = calc.calculate(gs, HColor.RED, terminated=False, info={})
+        assert reward == 0.0
+
+    def test_sync_baseline_absorbs_changes(self):
+        """sync_baseline re-snaps the baseline so changes made *outside* the
+        agent's turn (an opponent expanding) yield no reward on the next step."""
+        from ml.reward import DefaultRewardCalculator
+
+        gs = _small_game_state()
+        calc = DefaultRewardCalculator(
+            territory_weight=1.0, opponent_weight=1.0, income_weight=1.0,
+            territory_norm=1.0,
+        )
+        calc.reset(gs, HColor.RED)
+
+        # Simulate an opponent gaining a previously-neutral hex on *its* turn.
+        for hex in gs.hexes:
+            if hex.get_province() is None and hex.color == HColor.GRAY:
+                hex.color = HColor.BLUE
+                hex._province = next(iter(gs.provinces_manager.provinces))
+                break
+
+        # Absorb that change into the baseline instead of shaping it.
+        calc.sync_baseline(gs, HColor.RED)
+        reward = calc.calculate(gs, HColor.RED, terminated=False, info={})
+        assert reward == 0.0, "Opponent-turn change must not be rewarded/penalised"
+
 
 # ---------------------------------------------------------------------------
 # AntiyoyEnv
@@ -247,6 +371,7 @@ class TestAntiyoyEnv:
         assert obs.ndim == 1
         assert "turn_count" in info
         assert "ownership_pct" in info
+        assert "is_success" in info, "SB3 eval reads info['is_success'] for win rate"
 
     def test_step_end_turn(self):
         from ml.env import AntiyoyEnv
@@ -298,6 +423,71 @@ class TestAntiyoyEnv:
         for _ in range(3):
             obs, info = env.reset()
             assert obs.ndim == 1
+
+    def test_noop_opponents_do_not_expand(self):
+        """With noop_opponents, opponents end their turns without moving, so
+        their hex count cannot grow and control returns to the agent."""
+        from ml.env import AntiyoyEnv
+        from ml.reward import DefaultRewardCalculator
+
+        env = AntiyoyEnv(level_indices=[0], noop_opponents=True, max_turns=50)
+        env.reset(seed=0)
+        _, opp_before = DefaultRewardCalculator._hex_counts(
+            env.game_state, env.agent_color
+        )
+        for _ in range(4):
+            env.step(0)  # EndTurn; passive opponents must not act
+        _, opp_after = DefaultRewardCalculator._hex_counts(
+            env.game_state, env.agent_color
+        )
+        assert opp_after == opp_before, "Passive opponents must not expand"
+        current = env.game_state.entities_manager.get_current_entity()
+        assert current is None or current.color == env.agent_color
+
+    def test_tax_for_rank_stratifies_across_envs(self):
+        """Multi-value tax spreads parallel envs across the range (wrapping);
+        a single value is a constant handicap for every env."""
+        from ml.train import tax_for_rank
+
+        taxes = [0.99, 0.9, 0.8, 0.6, 0.0]
+        spread = [tax_for_rank(taxes, r) for r in range(len(taxes))]
+        assert spread == taxes
+        # Wraps beyond the list length.
+        assert tax_for_rank(taxes, len(taxes)) == taxes[0]
+        # Single value => constant regardless of rank.
+        assert all(tax_for_rank([0.9], r) == 0.9 for r in range(4))
+        assert tax_for_rank([], 3) == 0.0
+
+    def test_opponent_income_tax_configures_economics(self):
+        """The env installs the income-tax handicap on the economics manager,
+        exempting the agent's colour, so only opponents are taxed."""
+        from ml.env import AntiyoyEnv
+        from core.enums import Difficulty
+
+        env = AntiyoyEnv(
+            level_indices=[5],
+            opponent_difficulty=Difficulty.EASY,
+            opponent_income_tax=0.9,
+            max_turns=50,
+        )
+        env.reset(seed=0)
+        econ = env.game_state.economics_manager
+        assert econ.income_tax_rate == 0.9
+        assert econ.income_tax_exempt_color == env.agent_color
+
+    def test_time_cost_applied_per_step(self):
+        """A per-step time_cost is subtracted from every step reward. With
+        passive opponents and no agent moves, the end-turn shaping is 0, so the
+        step reward is exactly -time_cost."""
+        from ml.env import AntiyoyEnv
+
+        env = AntiyoyEnv(
+            level_indices=[0], noop_opponents=True, time_cost=0.5, max_turns=100
+        )
+        env.reset(seed=0)
+        _, reward, terminated, truncated, _ = env.step(0)  # EndTurn, no agent moves
+        assert not terminated and not truncated
+        assert reward == pytest.approx(-0.5, abs=1e-6)
 
 
 # ---------------------------------------------------------------------------

@@ -49,6 +49,32 @@ class AntiyoyEnv(gymnasium.Env):
         Pluggable encoder; defaults to ``FlatObservationEncoder``.
     reward_calculator : RewardCalculator | None
         Pluggable reward; defaults to ``DefaultRewardCalculator``.
+    invalid_action_penalty : float
+        Positive magnitude subtracted from the reward when a chosen action
+        cannot be decoded or fails validation. Discourages spamming illegal
+        actions. Defaults to ``0.0`` (off).
+    time_cost : float
+        Small positive magnitude subtracted from *every* ``step`` reward. Adds
+        a constant per-action cost so long games and per-turn action churn are
+        penalised, nudging the agent toward decisive play. Defaults to ``0.0``.
+    noop_opponents : bool
+        When *True*, opponents do not run their AI — each opponent turn is ended
+        immediately with no moves. This is the first rung of a difficulty
+        ladder (``noop -> easy -> average -> hard``): it lets the agent secure
+        first wins against a passive enemy before facing an active one.
+    opponent_income_tax : float
+        Fraction of each opponent's *positive per-turn income* withheld before
+        it is applied to their treasury (``0.0`` = off, ``1.0`` = keep nothing).
+        Upkeep is untouched, so opponents run their normal AI logic but grow
+        their economy more slowly (and can starve if upkeep outpaces net
+        income). A continuous difficulty knob — anneal ``0.99 -> 0`` across
+        resumes to hand the agent a progressively stronger enemy that plays the
+        same way throughout the game. The agent's own income is exempt.
+    record_replay : bool
+        When *True*, keep the ``history_manager`` attached so per-event replay
+        snapshots are captured and can be serialised with ``save_replay`` at
+        game end. Off by default because snapshotting roughly doubles per-step
+        cost; only enable it for one-off replay generation, never for training.
     """
 
     metadata = {"render_modes": []}
@@ -65,6 +91,12 @@ class AntiyoyEnv(gymnasium.Env):
         reward_calculator: Optional[RewardCalculator] = None,
         verbose: bool = False,
         log_progress: bool = False,
+        action_space_hexes: Optional[int] = None,  # None = auto-detect from levels
+        invalid_action_penalty: float = 0.0,
+        time_cost: float = 0.0,
+        noop_opponents: bool = False,
+        opponent_income_tax: float = 0.0,
+        record_replay: bool = False,
     ):
         super().__init__()
 
@@ -76,6 +108,12 @@ class AntiyoyEnv(gymnasium.Env):
         self.max_steps = max_steps
         self.verbose = verbose
         self.log_progress = log_progress
+        self._action_space_hexes = action_space_hexes
+        self.invalid_action_penalty = invalid_action_penalty
+        self.time_cost = time_cost
+        self.noop_opponents = noop_opponents
+        self.opponent_income_tax = opponent_income_tax
+        self.record_replay = record_replay
         self._current_level_index: Optional[int] = None
 
         self.obs_encoder = observation_encoder or FlatObservationEncoder()
@@ -99,8 +137,14 @@ class AntiyoyEnv(gymnasium.Env):
     def _bootstrap_spaces(self) -> None:
         """Decode all configured levels to find the max hex count, then
         define fixed-size observation and action spaces so that all
-        parallel envs share the same dimensions."""
-        if self.level_code:
+        parallel envs share the same dimensions.
+
+        If ``action_space_hexes`` was provided, it overrides the auto-detected
+        max, allowing the model to play on larger maps than the training set.
+        """
+        if self._action_space_hexes:
+            max_hexes = self._action_space_hexes
+        elif self.level_code:
             gs = self._decode_level_code(self.level_code)
             max_hexes = len(gs.hexes)
         else:
@@ -153,6 +197,12 @@ class AntiyoyEnv(gymnasium.Env):
                     break
         assert self.agent_color is not None, "No agent colour resolved"
 
+        # Apply the opponent income-tax handicap (exempting the agent) before
+        # any opponent turn is processed so their very first income is taxed.
+        if self.opponent_income_tax > 0.0:
+            self.game_state.economics_manager.income_tax_rate = self.opponent_income_tax
+            self.game_state.economics_manager.income_tax_exempt_color = self.agent_color
+
         # If the agent isn't first to move, run AI turns until it is
         self._advance_opponents()
 
@@ -180,7 +230,7 @@ class AntiyoyEnv(gymnasium.Env):
                 self.game_state, self.agent_color, True, {}
             )
             obs = self.obs_encoder.encode(self.game_state, self.agent_color)
-            return obs, reward, True, True, self._make_info()
+            return obs, reward - self.time_cost, True, True, self._make_info()
 
         terminated = False
         truncated = False
@@ -188,7 +238,8 @@ class AntiyoyEnv(gymnasium.Env):
         command = self.action_mapper.action_to_command(action, self.game_state)
         if command is None:
             obs = self.obs_encoder.encode(self.game_state, self.agent_color)
-            return obs, -0.01, False, False, self._make_info()
+            reward = -self.invalid_action_penalty - self.time_cost
+            return obs, reward, False, False, self._make_info()
 
         if self.log_progress and isinstance(command, EndTurnCommand):
             self._log(f"EndTurn at step {self._step_count}, turn {self._turn_count} — running opponents")
@@ -196,14 +247,24 @@ class AntiyoyEnv(gymnasium.Env):
         success, _err = self.executor.execute(command, self.agent_color)
         if not success:
             obs = self.obs_encoder.encode(self.game_state, self.agent_color)
-            return obs, -0.01, False, False, self._make_info()
+            reward = -self.invalid_action_penalty - self.time_cost
+            return obs, reward, False, False, self._make_info()
 
-        # Check game end after every action
+        # Shaping computed on the agent's *own* turn only. For an end-turn we
+        # snapshot the delta before opponents move, then re-baseline afterwards
+        # so the opponents' autonomous expansion is not attributed to the agent.
+        shaping_reward: Optional[float] = None
+
         if self.game_state.game_end_manager.is_game_ended():
             terminated = True
         elif isinstance(command, EndTurnCommand):
+            shaping_reward = self.reward_calc.calculate(
+                self.game_state, self.agent_color, False, {}
+            )
             self._turn_count += 1
             self._advance_opponents()
+            # Absorb opponents' turn deltas into the baseline (no reward for them).
+            self.reward_calc.sync_baseline(self.game_state, self.agent_color)
             if self.log_progress:
                 self._log(f"Opponents done, turn now {self._turn_count}")
             if self.game_state.game_end_manager.is_game_ended():
@@ -213,18 +274,28 @@ class AntiyoyEnv(gymnasium.Env):
             truncated = True
             terminated = True
 
-
         if self.log_progress and (terminated or truncated):
             self._log(f"Episode DONE: steps={self._step_count} turns={self._turn_count} "
                       f"terminated={terminated} truncated={truncated}")
 
-        reward = self.reward_calc.calculate(
-            self.game_state, self.agent_color, terminated, {}
-        )
+        if terminated:
+            # Terminal reward (win / loss / truncation) overrides shaping.
+            reward = self.reward_calc.calculate(
+                self.game_state, self.agent_color, True, {}
+            )
+        elif shaping_reward is not None:
+            # End-turn step: use the pre-opponent shaping snapshot.
+            reward = shaping_reward
+        else:
+            # Move/build within the agent's turn: shape normally.
+            reward = self.reward_calc.calculate(
+                self.game_state, self.agent_color, False, {}
+            )
+
         obs = self.obs_encoder.encode(self.game_state, self.agent_color)
         info = self._make_info()
 
-        return obs, reward, terminated, truncated, info
+        return obs, reward - self.time_cost, terminated, truncated, info
 
     def action_masks(self) -> np.ndarray:
         """Return action mask for sb3-contrib ``MaskablePPO`` / ``MaskableA2C``."""
@@ -274,9 +345,12 @@ class AntiyoyEnv(gymnasium.Env):
         from core.events import SYSTEM_AUTHOR
 
         # Disable history/undo tracking -- pure observers that serialise
-        # the full game state on every event, ~50% of per-step cost.
+        # the full game state on every event, ~50% of per-step cost. The
+        # history_manager is kept when recording a replay so its snapshots can
+        # be serialised at game end (much slower, so off during training/eval).
         gs.events_manager.remove_listener(gs.undo_manager)
-        gs.events_manager.remove_listener(gs.history_manager)
+        if not self.record_replay:
+            gs.events_manager.remove_listener(gs.history_manager)
 
         # Starting money
         for province in gs.provinces_manager.provinces:
@@ -314,18 +388,50 @@ class AntiyoyEnv(gymnasium.Env):
         if current and current.color == self.agent_color:
             return
 
+        if self.noop_opponents:
+            self._advance_opponents_noop()
+            return
+
         with self._suppress_stdout():
             gs.ai_manager.process_ai_turns()
+
+    def _advance_opponents_noop(self) -> None:
+        """End each opponent's turn without running its AI (passive enemy).
+
+        Cycles through non-agent players by submitting an ``EndTurnCommand`` for
+        each in turn (which still applies their turn-start income), so opponents
+        accumulate money but never move, build, or expand. Bounded by an
+        iteration guard so a stuck transition can't loop forever.
+        """
+        gs = self.game_state
+        n_entities = len(gs.entities_manager.entities or []) or 1
+        guard = 0
+        with self._suppress_stdout():
+            while guard < n_entities * 4:
+                guard += 1
+                if gs.game_end_manager.is_game_ended():
+                    return
+                current = gs.entities_manager.get_current_entity()
+                if current is None or current.color == self.agent_color:
+                    return
+                success, _err = self.executor.execute(
+                    EndTurnCommand(), current.color
+                )
+                if not success:
+                    # Can't advance this entity's turn — bail rather than spin.
+                    return
 
     def _make_info(self) -> dict:
         gs = self.game_state
         stats = gs.get_hex_ownership_stats(self.agent_color)
         winner = gs.game_end_manager.get_winner()
+        agent_won = winner is not None and winner.color == self.agent_color
         return {
             "turn_count": self._turn_count,
             "step_count": self._step_count,
             "ownership_pct": stats["percentage"],
             "game_ended": gs.game_end_manager.is_game_ended(),
             "winner_color": winner.color.value if winner else None,
-            "agent_won": winner is not None and winner.color == self.agent_color,
+            "agent_won": agent_won,
+            "is_success": agent_won,
         }

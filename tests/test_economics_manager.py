@@ -968,6 +968,69 @@ class TestEconomicsManager:
         assert new_money == initial_money + expected_profit
         assert new_money == 100 + 5  # 105
     
+    def test_income_tax_reduces_applied_income_for_taxed_color(self):
+        """A non-exempt (opponent) colour keeps only (1-rate) of its income;
+        consumption is untouched, so upkeep can push profit negative."""
+        ruleset = MockRuleset()
+
+        province = Province()
+        hex1 = Hex(coordinate1=0, coordinate2=0, color=HColor.BLUE)
+        hex1.piece = PieceType.FARM  # 5 income
+        province.add_hex(hex1)
+        hex2 = Hex(coordinate1=1, coordinate2=0, color=HColor.BLUE)
+        hex2.piece = PieceType.PEASANT  # 1 income, 2 consumption
+        province.add_hex(hex2)
+        hex3 = Hex(coordinate1=2, coordinate2=0, color=HColor.BLUE)  # 1 income
+        province.add_hex(hex3)
+        province.set_money(100)
+
+        game_state = MockGameState(
+            ruleset=ruleset, lap=1, turn_index=0,
+            current_color=HColor.RED, provinces=[province],
+        )
+        manager = EconomicsManager(game_state)
+        # Tax everyone except RED (the agent) at 90%.
+        manager.income_tax_rate = 0.9
+        manager.income_tax_exempt_color = HColor.RED
+
+        event = EventTurnEnd()
+        event.set_core_model(game_state)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
+
+        # Income 7 -> int(7*0.1)=0 taxed; consumption 2 => profit -2.
+        assert province.get_money() == 100 - 2
+
+    def test_income_tax_exempts_agent_color(self):
+        """The exempt (agent) colour is never taxed even when a rate is set."""
+        ruleset = MockRuleset()
+
+        province = Province()
+        hex1 = Hex(coordinate1=0, coordinate2=0, color=HColor.BLUE)
+        hex1.piece = PieceType.FARM  # 5 income
+        province.add_hex(hex1)
+        hex2 = Hex(coordinate1=1, coordinate2=0, color=HColor.BLUE)
+        hex2.piece = PieceType.PEASANT  # 1 income, 2 consumption
+        province.add_hex(hex2)
+        hex3 = Hex(coordinate1=2, coordinate2=0, color=HColor.BLUE)  # 1 income
+        province.add_hex(hex3)
+        province.set_money(100)
+
+        game_state = MockGameState(
+            ruleset=ruleset, lap=1, turn_index=0,
+            current_color=HColor.RED, provinces=[province],
+        )
+        manager = EconomicsManager(game_state)
+        # BLUE is exempt, so its full income applies despite a set rate.
+        manager.income_tax_rate = 0.9
+        manager.income_tax_exempt_color = HColor.BLUE
+
+        event = EventTurnEnd()
+        event.set_core_model(game_state)
+        game_state.events_manager.apply_event(event, author=SYSTEM_AUTHOR)
+
+        # Full income 7 - consumption 2 = +5.
+        assert province.get_money() == 100 + 5
+
     def test_profit_not_applied_on_first_lap(self):
         """Test that profits are NOT applied on the first lap (lap == 0)."""
         ruleset = MockRuleset()
