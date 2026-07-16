@@ -140,6 +140,8 @@ def _parse_args():
                    help="Passthrough to ml.train --opponent-weight.")
     p.add_argument("--income-weight", type=float, default=None,
                    help="Passthrough to ml.train --income-weight.")
+    p.add_argument("--treasury-weight", type=float, default=None,
+                   help="Passthrough to ml.train --treasury-weight.")
     p.add_argument("--truncation-penalty", type=float, default=None,
                    help="Passthrough to ml.train --truncation-penalty.")
     p.add_argument("--invalid-action-penalty", type=float, default=None,
@@ -202,6 +204,7 @@ def _train_level(args, level: int, resume: str, turn_cap: int) -> None:
         ("--territory-weight", args.territory_weight),
         ("--opponent-weight", args.opponent_weight),
         ("--income-weight", args.income_weight),
+        ("--treasury-weight", args.treasury_weight),
         ("--truncation-penalty", args.truncation_penalty),
         ("--invalid-action-penalty", args.invalid_action_penalty),
         ("--time-cost", args.time_cost),

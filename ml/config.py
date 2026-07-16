@@ -26,12 +26,19 @@ class TrainConfig:
     territory_weight: float = 0.5
     opponent_weight: float = 0.0
     income_weight: float = 0.004
+    # Slice of the agent's treasury folded into the economy potential. 0.0 = off
+    # (upkeep/spend unshaped). Small positives make cost-efficient unit choice
+    # and treasury management emergent (see ml/reward.py).
+    treasury_weight: float = 0.0
     truncation_penalty: float = -1.0
     invalid_action_penalty: float = 0.0
     time_cost: float = 0.0  # constant per-step cost; discourages action churn
 
     # Curriculum / early stopping
     resume_path: Optional[str] = None
+    # When resuming, reset the displayed timestep counter to 0 (weights/optimizer
+    # are still loaded). Off by default so resumes continue the cumulative count.
+    reset_timesteps: bool = False
     early_stop: bool = False
     win_rate_threshold: float = 0.6
     early_stop_patience: int = 3
@@ -51,6 +58,10 @@ class TrainConfig:
 
     # Model identity (key into ml/model_registry.yaml)
     model_details: str = "first_approach"
+    # TensorBoard run/folder name. When None, SB3 uses the algorithm name
+    # (e.g. "MaskablePPO"); on resume that reuses the latest folder. Set a
+    # distinct name to isolate an experiment in its own TB folder.
+    run_name: Optional[str] = None
 
     # Infrastructure
     n_envs: int = 8

@@ -14,11 +14,18 @@ class RewardCalculator(ABC):
     def reset(self, game_state: GameState, agent_color: HColor) -> None:
         """Called on env reset to initialise any baseline tracking."""
 
-    def sync_baseline(self, game_state: GameState, agent_color: HColor) -> None:
+    def sync_baseline(
+        self,
+        game_state: GameState,
+        agent_color: HColor,
+        absorb_economy: bool = True,
+    ) -> None:
         """Re-baseline shaping state without emitting reward (default: no-op).
 
         Overridden by calculators that use per-step deltas so opponent-turn
-        changes can be absorbed rather than shaped. Safe to call on any
+        changes can be absorbed rather than shaped. ``absorb_economy`` lets the
+        caller re-snap ownership counts while *keeping* the economy baseline
+        (so economy behaves as a continuous potential). Safe to call on any
         calculator.
         """
         return None
@@ -62,10 +69,19 @@ class DefaultRewardCalculator(RewardCalculator):
       hex *doubly* rewarded (your count up, theirs down = ``1:2`` vs a neutral
       grab) and gives a dense gradient toward eliminating the opponent. Off by
       default (``opponent_weight=0``) to preserve prior behaviour.
-    - **economy**: change in ``income - hex_count`` = ``4*farms - trees``.
-      The base ``+1`` per hex cancels (so it does not double-count territory),
-      unit upkeep is excluded (so building military is not punished), and the
-      per-object values are constants so the signal is map-size invariant.
+    - **economy**: change in ``(4*farms - trees) + treasury_weight*treasury``.
+      The ``4*farms - trees`` part is ``income - hex_count``: the base ``+1`` per
+      hex cancels (so it does not double-count territory) and the per-object
+      values are constants so the signal is map-size invariant. When
+      ``treasury_weight > 0`` the agent's bank balance is added as a continuous
+      potential, so *spending* (building a unit/farm) and *upkeep* (idle army
+      draining the treasury each turn) are felt immediately as a drop in
+      potential — the agent must recoup a unit's cost through territory to come
+      out ahead, which makes expensive-unit-for-cheap-job and the over-build →
+      bankruptcy spiral net-negative. There is no farming loop: money only rises
+      via income (bounded per turn) and falls via spend/upkeep, so it cannot
+      oscillate. With ``treasury_weight = 0.0`` (default) upkeep is excluded and
+      building military is not punished, matching prior behaviour.
 
     All three are self-relative per-step deltas measured against the previous
     state, so they telescope over an episode and stay near potential-based.
@@ -80,7 +96,13 @@ class DefaultRewardCalculator(RewardCalculator):
         ``opponent_weight * (prev_opp_hexes - opp_hexes) / territory_norm``).
         Defaults to ``0.0`` (disabled).
     income_weight : float
-        Weight on the per-step economy (``4*farms - trees``) delta.
+        Weight on the per-step economy delta.
+    treasury_weight : float
+        How much of the agent's bank balance folds into the economy potential
+        (``economy += treasury_weight * treasury``). ``0.0`` (default) disables
+        it (upkeep/spend not shaped, prior behaviour). Small positive values
+        (~0.1–0.25) make cost-efficient unit choice and treasury management
+        emergent; treasury magnitudes dwarf a single hex, so keep it small.
     territory_norm : float
         Fixed denominator for the territory/opponent terms so a hex is worth the
         same on any map. Defaults to ``MAX_CAMPAIGN_HEXES`` (384).
@@ -102,11 +124,13 @@ class DefaultRewardCalculator(RewardCalculator):
         loss_penalty: float = -1.0,
         truncation_penalty: float = -1.0,
         opponent_weight: float = 0.0,
+        treasury_weight: float = 0.0,
         territory_norm: float = float(MAX_CAMPAIGN_HEXES),
     ):
         self.territory_weight = territory_weight
         self.opponent_weight = opponent_weight
         self.income_weight = income_weight
+        self.treasury_weight = treasury_weight
         self.territory_norm = float(territory_norm) if territory_norm else 1.0
         self.win_reward = win_reward
         self.loss_penalty = loss_penalty
@@ -118,20 +142,34 @@ class DefaultRewardCalculator(RewardCalculator):
     def reset(self, game_state: GameState, agent_color: HColor) -> None:
         self.sync_baseline(game_state, agent_color)
 
-    def sync_baseline(self, game_state: GameState, agent_color: HColor) -> None:
-        """Snap the shaping baseline to the current state without emitting reward.
+    def sync_baseline(
+        self,
+        game_state: GameState,
+        agent_color: HColor,
+        absorb_economy: bool = True,
+    ) -> None:
+        """Re-snap the shaping baseline without emitting reward.
 
-        Used to *exclude* changes made outside the agent's own turn (an
-        opponent expanding into neutral land on its turn) from the per-step
-        shaping. The env computes the end-turn shaping first, advances the
-        opponents, then calls this so their autonomous deltas are absorbed into
-        the baseline rather than penalising/rewarding the agent for moves it did
-        not make.
+        **Ownership** counts are always re-snapped: this *absorbs* opponent-turn
+        ownership changes (an opponent expanding, or trading hexes with the
+        agent) so the agent is neither rewarded nor penalised for moves it did
+        not make — this is what prevents the "never end turn" exploit.
+
+        **Economy** (``4*farms - trees`` on the agent's land) is only re-snapped
+        when ``absorb_economy=True`` (the default, used on ``reset`` to
+        initialise the baseline). When called after an agent turn with
+        ``absorb_economy=False``, the economy baseline is *preserved* so that
+        economy behaves as a continuous potential: tree regrowth on the agent's
+        land, and losing a farm to an opponent, are carried and scored on the
+        agent's next action (a clear "keep the tree population down / protect
+        your farms" signal) instead of being silently absorbed — which would
+        otherwise let the agent farm reward by re-clearing regrowth for free.
         """
         self._prev_agent_hexes, self._prev_opp_hexes = self._hex_counts(
             game_state, agent_color
         )
-        self._prev_economy = self._economy(game_state, agent_color)
+        if absorb_economy:
+            self._prev_economy = self._economy(game_state, agent_color)
 
     @staticmethod
     def _hex_counts(game_state: GameState, agent_color: HColor):
@@ -152,12 +190,14 @@ class DefaultRewardCalculator(RewardCalculator):
                     opp_hexes += 1
         return agent_hexes, opp_hexes
 
-    @staticmethod
-    def _economy(game_state: GameState, agent_color: HColor) -> float:
-        """Return ``income - hex_count`` for the agent (= ``4*farms - trees``).
+    def _economy(self, game_state: GameState, agent_color: HColor) -> float:
+        """Return the agent's economy potential.
 
-        Only hexes that belong to a province generate income, matching the
-        engine's economics; single unattached hexes are ignored.
+        ``(4*farms - trees)`` (= per-hex ``income - 1`` summed over province
+        hexes) plus, when ``treasury_weight > 0``, ``treasury_weight * treasury``
+        (total bank balance across the agent's provinces). Only hexes that
+        belong to a province generate income, matching the engine's economics;
+        single unattached hexes are ignored.
         """
         ruleset = game_state.ruleset
         if ruleset is None:
@@ -166,7 +206,15 @@ class DefaultRewardCalculator(RewardCalculator):
         for hex in game_state.hexes:
             if hex.color == agent_color and hex.get_province() is not None:
                 economy += ruleset.get_hex_income(hex.piece) - 1
-        return float(economy)
+        economy = float(economy)
+        if self.treasury_weight:
+            treasury = sum(
+                p.get_money()
+                for p in game_state.provinces_manager.provinces
+                if p.get_color() == agent_color
+            )
+            economy += self.treasury_weight * float(treasury)
+        return economy
 
     def calculate(
         self,

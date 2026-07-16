@@ -625,3 +625,184 @@ while play quality doesn't. The signal is too coarse to distinguish *deliberate*
   over-investment without use is discouraged.
 - Consider **per-unit / per-turn objective shaping** rather than only board-state deltas,
   to penalise net-zero wandering that the current potential-based shaping treats as free.
+
+### Turn-boundary audit + the reward-farming asymmetry (scheme 3)
+
+Auditing the agent/human end-turn flow (prompted by the tree-regrowth question) turned up a
+structural issue in how the shaping baseline handles the gap between the agent's last action
+and its next turn.
+
+**How scoring actually works.** Reward is emitted **per atomic action** (each `step()` = one
+move/build/end-turn), as a delta against `_prev_*` which updates every step. Because the
+deltas telescope, the sum over a turn equals `(state after the agent's last action) − (turn-start baseline)`.
+The end-turn step emits **zero** shaping. The open design question is what to do with the
+changes in the boundary gap, which contains two very different things: **engine effects**
+(tree breeding, grave→tree, lonely-city→tree, bankruptcy unit-kills — all fire only at
+`TURN_END`) and **opponent moves**.
+
+**Turn order matters.** `EventTurnEnd.apply_change()` switches `turn_index` *before* listeners
+fire, so `_spawn_breed` runs on the **last→first** entity transition. On level 5 the agent
+(`aqua`, index 1) is the **last** entity, so breeding fires **inside the agent's own
+end-turn `execute()`** — confirmed empirically (all breed events at `turn_index==0` during the
+`agent_step` phase).
+
+**The bug class: asymmetric absorb → reward farming.** The old `sync_baseline` re-snapped
+*everything* (ownership **and** economy) after opponents, i.e. it *absorbed* the boundary gap
+with no reward. That absorb is correct for **opponent ownership** moves (prevents the
+never-end-turn exploit) but wrong for **economy**: it swallows the "undo" (tree regrowth on
+agent land, or losing a farm) while the agent's "redo" (re-clearing) is rewarded — breaking
+the telescoping property. Demonstrated: 3 clear/regrow cycles paid **+3.0** for **zero** net
+economy change. This scales with `income_weight` (the knob we're about to raise) and can rival
+`win_reward=1.0` over a long game.
+
+> Note: our first end-turn fix (zeroing all end-turn shaping) *widened* this — it removed the
+> regrowth penalty entirely. The right framing is that penalizing regrowth is *correct*
+> potential-based shaping and is exactly the "out-clear the trees" pressure we want; the
+> earlier never-end-turn exploit came from the large **opponent-decline** term, not from
+> small economy deltas.
+
+**Fix — scheme 3 (absorb ownership, defer economy).** `sync_baseline(absorb_economy=False)`
+now re-snaps **only ownership** counts (opponent expansion/trading stays absorbed) and
+**preserves the economy baseline**, so economy is a continuous potential. Engine/opponent
+economy effects in the boundary gap are carried and scored on the agent's **next action**
+(not blamed on the end-turn action, and not absorbed for free). `reset()` still uses
+`absorb_economy=True` to initialise all baselines.
+
+What the agent now feels:
+- **Tree game (a/b/c):** trees left standing → `−income_weight` each; clear one that regrew →
+  net 0; clear more than regrows → net `+`. Real pressure to keep the tree population down.
+- **Protect-your-farms:** when an opponent captures your farm, the hex leaves your province →
+  economy `−4` (`5 income − 1`) scored on your next step. The hex-count loss stays absorbed
+  (no double-count, no never-end-turn), but the *economic* damage lands. Relevant on level 5,
+  where red *does* trade hexes (it attacks with the weakest unit; earlier "red never attacks"
+  was an artifact of our play style, not the AI).
+- **No farming:** re-clearing free regrowth no longer pays.
+- **Opponent hex-trading (ownership)** stays absorbed — not a reward loop that matters
+  (bounded by treasury in practice: you must rebuild the unit to retake), and a legitimate
+  cash-drain strategy on later levels. Towers are the cheap defensive anchor there.
+
+**By-design gaps still open (not leaks):** losing *plain* land to opponents and self-inflicted
+bankruptcy produce no dense penalty (only the terminal loss) — intentional, to keep the
+never-end-turn exploit dead.
+
+Regression tests: `test_sync_baseline_defers_economy_prevents_farming` (regrow/clear nets 0)
+and `test_end_turn_defers_economy_and_absorbs_ownership` (end-turn emits 0; ownership
+absorbed; economy preserved).
+
+### Replay-based behaviour analysis (the `economy_potential` / scheme-3 model)
+
+Watched level-5 replays at 80% tax (fast win 87t, slow win 217t, slow loss 38t). This model
+is **markedly better** than the tax-mixed one:
+
+- **Early game is now purposeful:** clear expansion into neutral land *and* deliberate tree
+  clearing. Scheme 3's "keep the tree population down" signal is landing.
+- **Mid game shows real defence:** the agent places a **tower to protect farms** — an
+  emergent, sensible response to the protect-your-farms signal.
+
+But the mid/late game still falls apart, and the replays show *why*:
+
+1. **No commitment to conquest.** Once easy neutral land is gone it does "a bit of
+   everything" — a little tree removal, a little enemy poke, a little farm building — and
+   **never latches onto aggressively defeating the enemy**.
+2. **Bad unit-type selection.** It builds *expensive* units to do *cheap* jobs (e.g. a
+   strong unit to clear a tree).
+3. **Bankruptcy spiral.** The over-spend drains the treasury → units go unpaid → become
+   graves → graves become trees → economy slows → death spiral.
+4. **Unorganised control → coin-flip outcomes.** Units wander; wins and losses both look
+   like both sides *stumbling* into the result rather than executing a plan.
+
+**Root cause — the reward is money-blind.** The economy potential is `4*farms − trees`
+plus territory/opponent terms; **treasury and unit cost appear nowhere** in the reward
+(the observation *does* expose money, so this is a signal gap, not a perception gap):
+
+- Clearing a tree pays the same `+1` whether done with a 10-cost peasant or a 30-cost
+  baron → unit choice is unconstrained (explains #2).
+- Over-spending is only punished by the *terminal* loss many discounted steps later —
+  an almost unlearnable credit-assignment gap → no early warning of bankruptcy (explains #3).
+- Once neutral land runs out the territory delta flatlines; the only remaining pull is
+  tower-guarded opponent-decline plus a heavily discounted terminal win, so the
+  risk-adjusted gradient toward conquest is weak and the policy diffuses into high-entropy
+  "everything a little" (explains #1 and #4).
+
+**Planned fix — put treasury into the economy potential.** Extend `_economy()` from
+`4*farms − trees` to also include a small slice of the agent's bank balance
+(`treasury_weight * treasury`), still as a per-step potential (deltas telescope; no farming
+loop because money only rises via income and falls via spend/upkeep — it can't oscillate).
+Emergent consequences, not hard-coded rules:
+
+- Building a unit drops the potential by its cost *now*; the unit only "recoups" it by
+  capturing enough hexes → expensive units must earn their keep through conquest, so using
+  a baron to clear a tree becomes visibly bad and cheap-for-cheap-jobs falls out.
+- Upkeep is now felt (treasury declines each turn you hold idle military) — the deliberate
+  earlier choice to *exclude* upkeep is reversed here, because the whole point is to punish
+  the idle-army drain. Productive military still wins (territory reward > upkeep); only
+  *wandering* military is penalised.
+- The bankruptcy path gets a *continuous* early-warning signal as treasury falls, instead
+  of one delayed terminal hit.
+
+`treasury_weight` defaults to `0.0` (off, preserves prior behaviour/tests); enable via
+`--treasury-weight`. Calibration is the open question: treasury magnitudes (~0–150) dwarf a
+hex (`territory_weight/384 ≈ 0.0026`), so the weight must be small enough that *productive*
+spending stays net-positive. Starting guess ~0.1–0.25; tune empirically. Aggression (#1) is
+a separate, later lever: bump `opponent_weight` and lean on the tax curriculum so the
+conquest maneuver can actually be completed and reinforced at high tax, then anneal down.
+
+### Replay-based behaviour analysis (the `treasury_potential` model)
+
+Trained by continuing `economy_potential` with `--treasury-weight 0.1`, full-spread eval
+(`--n-eval-envs 8 --eval-episodes 16`) and a harder bar (`--win-rate-threshold 0.75`,
+patience 5). It plateaued at ~0.8 win rate across the `[0.95..0.78]` spread and the
+early-stop never latched (eval noise at 2 episodes/tax bounced it across the 0.75 line);
+stopped manually.
+
+**Quantitative frontier moved.** At 75% tax the win rate went from **0% → ~12.5%** (5/40
+sampled games). More telling than the wins: the *loss profile* changed. Previously 0.75
+losses were near-uniformly fast collapses (~10–20 turns, ~15% ownership). Now there's a new
+bucket of **long grinds that reach 50–60% ownership at the 250-turn cap** — the agent
+survives and expands but can't *close out*. The fast early collapses still dominate the loss
+count.
+
+What the replays show:
+
+- **Towers — real new learning (the headline win).** The agent builds *more* towers and now
+  uses them to **protect land, not just farms** (previously towers were farm-guards only).
+  The effect is strategically real: red **can't win captured territory back**, because the
+  towered hexes out-defend red's (weak) attackers. This is exactly the "towers are the cheap
+  defensive anchor" behaviour we hoped the economy/treasury signals would surface.
+- **Bankruptcy spiral — improved but not solved.** The negative-treasury → unpaid-units →
+  graves → trees sequence happens **less often** (the treasury potential's early-warning is
+  working) but **still occurs**. Suggests `treasury_weight=0.1` helps but isn't decisive;
+  worth an ablation at 0.15–0.2, watching that it doesn't turn the agent miserly.
+- **Trees — no learning.** The agent still does **not** clear trees systematically. The
+  scheme-3 "keep the tree population down" signal is evidently too weak against the friction
+  of the multi-step, cluster-based clearing minigame — or is being drowned by the other
+  terms. Trees remain an economic drag.
+- **Strong units — no effective use, and a sharp new observation.** The agent builds strong
+  units but doesn't wield them offensively. Repeatedly it **parks a strong unit *adjacent to*
+  an enemy tower and never attacks it**. Two hypotheses (not yet distinguished):
+  1. *Hard-exploration / spatial-blindness:* "move onto the tower hex to break it" is a
+     specific multi-step, location-dependent maneuver, and the blind aggregate observation
+     gives no signal that *this* adjacent hex is the high-value target. The unit sits because
+     the policy can't see the geometry that makes the attack good. (Consistent with the
+     southern-cleanup and random-movement findings.)
+  2. *A genuine reward/mechanic disincentive:* taking the tower hex might be net-negative
+     under the current shaping in a way we haven't modelled — e.g. the captured hex extends
+     the agent's frontier/upkeep, or exposes the (expensive) attacking unit to a
+     counter-recapture that costs more than the hex is worth. **Open question to verify from
+     the engine + a controlled replay:** does removing an enemy tower have a downstream cost
+     that the agent is (correctly) avoiding, or is this purely an exploration failure? This
+     matters — if it's (2), no amount of extra training fixes it without a reward/mechanic
+     change; if it's (1), it's more evidence for the spatial-encoding rework.
+- **How it still wins: red self-destructs.** The decisive mechanism is unchanged from before
+  — the agent doesn't *conquer* red so much as **out-last** it: red gets overrun by its own
+  (untended) trees, its economy chokes, and it can no longer build units to break the
+  agent's towers. The agent's tower wall + red's tree-starvation = a stumbled win, not an
+  executed one.
+
+Net: genuine progress (towers-for-land is a real learned strategy; fewer bankruptcies; the
+0.75 frontier cracked open), but the core gaps persist — tree upkeep, offensive use of
+strong units (esp. breaking towers), and *finishing* a won-but-not-closed game. The last two
+point hard at the representational ceiling (blind observation + index actions); tree upkeep
+points at reward weighting. Next candidate levers: verify the tower-attack question against
+the engine; ablate `treasury_weight`; and seriously scope the spatial encoding + per-hex
+action head as the structural fix for offense/closing.

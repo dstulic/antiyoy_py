@@ -9,9 +9,9 @@ import gymnasium
 from gymnasium import spaces
 
 from core.game_state import GameState
-from core.enums import HColor, EventType, Difficulty
+from core.enums import HColor, EventType, Difficulty, PieceType
 from commands.executor import CommandExecutor
-from commands.types import EndTurnCommand
+from commands.types import EndTurnCommand, MoveUnitCommand, BuildPieceCommand
 from ml.observation import ObservationEncoder, FlatObservationEncoder
 from ml.action_space import ActionMapper
 from ml.reward import RewardCalculator, DefaultRewardCalculator
@@ -209,6 +209,9 @@ class AntiyoyEnv(gymnasium.Env):
         self.reward_calc.reset(self.game_state, self.agent_color)
         self._turn_count = 0
         self._step_count = 0
+        # Per-episode behaviour counters (agent's own actions only).
+        self._farms_built = 0
+        self._trees_cleared = 0
 
         obs = self.obs_encoder.encode(self.game_state, self.agent_color)
         info = self._make_info()
@@ -244,27 +247,46 @@ class AntiyoyEnv(gymnasium.Env):
         if self.log_progress and isinstance(command, EndTurnCommand):
             self._log(f"EndTurn at step {self._step_count}, turn {self._turn_count} — running opponents")
 
+        # Snapshot (pre-execute) whether this agent action clears a tree, so it
+        # is attributed to the agent rather than to breeding/opponents.
+        clears_tree = (
+            (isinstance(command, MoveUnitCommand) and command.finish_hex.has_tree())
+            or (isinstance(command, BuildPieceCommand) and command.hex.has_tree())
+        )
+
         success, _err = self.executor.execute(command, self.agent_color)
         if not success:
             obs = self.obs_encoder.encode(self.game_state, self.agent_color)
             reward = -self.invalid_action_penalty - self.time_cost
             return obs, reward, False, False, self._make_info()
 
-        # Shaping computed on the agent's *own* turn only. For an end-turn we
-        # snapshot the delta before opponents move, then re-baseline afterwards
-        # so the opponents' autonomous expansion is not attributed to the agent.
+        if clears_tree:
+            self._trees_cleared += 1
+        if isinstance(command, BuildPieceCommand) and command.piece_type == PieceType.FARM:
+            self._farms_built += 1
+
+        # Shaping is emitted only on the agent's move/build steps. The end-turn
+        # step itself carries *zero* shaping — the agent's own board changes
+        # were already shaped action-by-action. Afterwards we re-baseline, but
+        # asymmetrically (scheme 3): opponent-driven *ownership* changes are
+        # absorbed (so red trading/expanding on its turn is not attributed to
+        # the agent, avoiding the never-end-turn exploit), while the *economy*
+        # potential is preserved so engine/opponent economy effects (tree
+        # regrowth on the agent's land, or losing a farm) are carried and
+        # scored on the agent's next action rather than silently absorbed.
         shaping_reward: Optional[float] = None
 
         if self.game_state.game_end_manager.is_game_ended():
             terminated = True
         elif isinstance(command, EndTurnCommand):
-            shaping_reward = self.reward_calc.calculate(
-                self.game_state, self.agent_color, False, {}
-            )
+            shaping_reward = 0.0
             self._turn_count += 1
             self._advance_opponents()
-            # Absorb opponents' turn deltas into the baseline (no reward for them).
-            self.reward_calc.sync_baseline(self.game_state, self.agent_color)
+            # Absorb opponents' *ownership* deltas but keep the economy baseline
+            # so regrowth / farm loss surface on the next agent step.
+            self.reward_calc.sync_baseline(
+                self.game_state, self.agent_color, absorb_economy=False
+            )
             if self.log_progress:
                 self._log(f"Opponents done, turn now {self._turn_count}")
             if self.game_state.game_end_manager.is_game_ended():
@@ -284,7 +306,7 @@ class AntiyoyEnv(gymnasium.Env):
                 self.game_state, self.agent_color, True, {}
             )
         elif shaping_reward is not None:
-            # End-turn step: use the pre-opponent shaping snapshot.
+            # End-turn step: no shaping (engine side-effects are not the agent's).
             reward = shaping_reward
         else:
             # Move/build within the agent's turn: shape normally.
@@ -434,4 +456,6 @@ class AntiyoyEnv(gymnasium.Env):
             "winner_color": winner.color.value if winner else None,
             "agent_won": agent_won,
             "is_success": agent_won,
+            "farms_built": self._farms_built,
+            "trees_cleared": self._trees_cleared,
         }

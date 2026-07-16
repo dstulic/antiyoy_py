@@ -357,6 +357,67 @@ class TestDefaultRewardCalculator:
         reward = calc.calculate(gs, HColor.RED, terminated=False, info={})
         assert reward == 0.0, "Opponent-turn change must not be rewarded/penalised"
 
+    def test_sync_baseline_defers_economy_prevents_farming(self):
+        """Scheme 3: ``sync_baseline(absorb_economy=False)`` re-snaps ownership
+        (so opponent-turn expansion is absorbed) but *preserves* the economy
+        baseline, so tree regrowth is scored on the next step and a
+        regrow/clear cycle nets zero — the agent cannot farm reward by
+        re-clearing free regrowth."""
+        from ml.reward import DefaultRewardCalculator
+
+        gs = _small_game_state()
+        calc = DefaultRewardCalculator(
+            territory_weight=1.0, opponent_weight=1.0, income_weight=1.0,
+            territory_norm=1.0,
+        )
+        calc.reset(gs, HColor.RED)
+
+        # An agent-owned, empty, in-province hex to grow/clear a tree on.
+        H = next(h for h in gs.hexes if h.color == HColor.RED
+                 and h.piece is None and h.get_province() is not None)
+
+        # Boundary: a tree regrows on H (economy -1). Absorb ownership only.
+        H.piece = PieceType.PINE
+        calc.sync_baseline(gs, HColor.RED, absorb_economy=False)
+        # The regrowth is NOT absorbed -> it is scored on the next step.
+        reward_regrow = calc.calculate(gs, HColor.RED, terminated=False, info={})
+        assert reward_regrow == pytest.approx(-1.0)
+
+        # Agent clears H on its turn (economy +1).
+        H.piece = None
+        reward_clear = calc.calculate(gs, HColor.RED, terminated=False, info={})
+        assert reward_clear == pytest.approx(1.0)
+
+        # Net over the regrow/clear cycle is zero -> not farmable.
+        assert reward_regrow + reward_clear == pytest.approx(0.0)
+
+    def test_treasury_folds_into_economy_potential(self):
+        """With ``treasury_weight>0`` a treasury drop (spending) lowers the
+        economy potential immediately; with the default ``0.0`` it is ignored."""
+        from ml.reward import DefaultRewardCalculator
+
+        # Off (default): spending is not shaped.
+        gs = _small_game_state()  # RED province starts with 50 money
+        red_prov = next(p for p in gs.provinces_manager.provinces
+                        if p.get_color() == HColor.RED)
+        off = DefaultRewardCalculator(territory_weight=0.0, income_weight=1.0,
+                                      treasury_weight=0.0)
+        off.reset(gs, HColor.RED)
+        red_prov.set_money(red_prov.get_money() - 30)
+        assert off.calculate(gs, HColor.RED, terminated=False, info={}) \
+            == pytest.approx(0.0)
+
+        # On: spending 30 costs treasury_weight * income_weight * 30.
+        gs2 = _small_game_state()
+        prov2 = next(p for p in gs2.provinces_manager.provinces
+                     if p.get_color() == HColor.RED)
+        on = DefaultRewardCalculator(territory_weight=0.0, income_weight=1.0,
+                                     treasury_weight=0.1)
+        on.reset(gs2, HColor.RED)
+        prov2.set_money(prov2.get_money() - 30)
+        assert on.calculate(gs2, HColor.RED, terminated=False, info={}) \
+            == pytest.approx(-3.0)
+
 
 # ---------------------------------------------------------------------------
 # AntiyoyEnv
@@ -488,6 +549,74 @@ class TestAntiyoyEnv:
         _, reward, terminated, truncated, _ = env.step(0)  # EndTurn, no agent moves
         assert not terminated and not truncated
         assert reward == pytest.approx(-0.5, abs=1e-6)
+
+    def test_end_turn_defers_economy_and_absorbs_ownership(self):
+        """Scheme 3: the end-turn step emits no shaping, and afterwards the
+        calculator absorbs opponent *ownership* changes but *preserves* the
+        economy baseline — so an economy change made while ``EndTurnCommand``
+        executes is carried to the next agent step, not scored at end-turn and
+        not silently absorbed.
+
+        Regression for the breeding-attribution bug on level 5: the agent is
+        the *last* entity, so ``_spawn_breed`` fires inside the agent's own
+        end-turn ``execute()``. It must neither be blamed on the end-turn action
+        (old bug) nor be absorbed for free (which would let the agent farm
+        reward by re-clearing regrowth).
+        """
+        from ml.env import AntiyoyEnv
+        from ml.reward import DefaultRewardCalculator
+        from commands.types import EndTurnCommand
+        from core.enums import PieceType
+
+        # Large income_weight so any mis-scored economy delta would be obvious.
+        calc = DefaultRewardCalculator(
+            territory_weight=1.0, opponent_weight=1.0, income_weight=10.0,
+            territory_norm=1.0,
+        )
+        env = AntiyoyEnv(
+            level_indices=[5], opponent_difficulty=Difficulty.EASY,
+            reward_calculator=calc, max_turns=50,
+        )
+        env.reset(seed=0)
+        assert env.agent_color == env.game_state.entities_manager.entities[-1].color, \
+            "Test assumes the agent is the last entity (the buggy case)"
+
+        real_execute = env.executor.execute
+        injected = {"n": 0}
+
+        def sabotage(cmd, color):
+            result = real_execute(cmd, color)
+            # Mimic breeding: drop a tree on one of the agent's empty owned hexes
+            # while the end-turn executes (economy -1 for that hex).
+            if isinstance(cmd, EndTurnCommand) and color == env.agent_color:
+                for hex in env.game_state.hexes:
+                    if (hex.color == env.agent_color
+                            and hex.get_province() is not None
+                            and not hex.has_piece()):
+                        hex.set_piece(PieceType.PINE)
+                        injected["n"] += 1
+                        break
+            return result
+
+        env.executor.execute = sabotage
+
+        _, reward, terminated, truncated, _ = env.step(0)  # EndTurn
+        assert not terminated and not truncated
+        assert injected["n"] == 1, "Test must actually inject a tree to be meaningful"
+        # The end-turn step itself emits no shaping.
+        assert reward == pytest.approx(0.0, abs=1e-9)
+
+        # Ownership was absorbed: the baseline matches the current counts, so an
+        # opponent expanding/trading on its turn is not shaped.
+        a_hexes, o_hexes = DefaultRewardCalculator._hex_counts(
+            env.game_state, env.agent_color
+        )
+        assert calc._prev_agent_hexes == a_hexes
+        assert calc._prev_opp_hexes == o_hexes
+        # Economy was NOT absorbed: the injected regrowth pushed current economy
+        # below the preserved baseline, so it will be scored on the next step.
+        cur_econ = calc._economy(env.game_state, env.agent_color)
+        assert calc._prev_economy > cur_econ
 
 
 # ---------------------------------------------------------------------------

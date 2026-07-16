@@ -245,6 +245,7 @@ class TrainingLogger:
                 "territory_weight": self.cfg.territory_weight,
                 "opponent_weight": self.cfg.opponent_weight,
                 "income_weight": self.cfg.income_weight,
+                "treasury_weight": self.cfg.treasury_weight,
                 "truncation_penalty": self.cfg.truncation_penalty,
                 "invalid_action_penalty": self.cfg.invalid_action_penalty,
                 "time_cost": self.cfg.time_cost,

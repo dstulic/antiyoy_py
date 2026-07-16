@@ -56,8 +56,13 @@ def _parse_args() -> TrainConfig:
                              "DECLINE (rewards shrinking the enemy / penalises "
                              "letting them grow; default: 0.0 = off)")
     parser.add_argument("--income-weight", type=float, default=0.004,
-                        help="Weight on the per-step economy (4*farms-trees) "
-                             "delta (default: 0.004)")
+                        help="Weight on the per-step economy delta (default: 0.004)")
+    parser.add_argument("--treasury-weight", type=float, default=0.0,
+                        help="Slice of the agent's treasury folded into the "
+                             "economy potential (0.0=off). Makes over-spending / "
+                             "idle-army upkeep and expensive-unit-for-cheap-job "
+                             "net-negative; keep small (~0.1-0.25) as treasury "
+                             "dwarfs a single hex (default: 0.0)")
     parser.add_argument("--truncation-penalty", type=float, default=-1.0,
                         help="Terminal reward when the episode truncates with no "
                              "winner (default: -1.0)")
@@ -103,7 +108,16 @@ def _parse_args() -> TrainConfig:
     parser.add_argument("--eval-max-steps", type=int, default=5000,
                         help="Max steps per eval episode (default: 5000)")
     parser.add_argument("--n-eval-envs", type=int, default=5,
-                        help="Number of parallel eval environments (default: 4)")
+                        help="Number of parallel eval environments (default: 5). "
+                             "Eval env i is pinned to the i-th --opponent-income-tax "
+                             "value, so set this to the number of tax values to "
+                             "evaluate the WHOLE difficulty spread (otherwise only "
+                             "the first N taxes — the easiest — are ever measured).")
+    parser.add_argument("--eval-episodes", type=int, default=5,
+                        help="Episodes per evaluation (default: 5). SB3 spreads "
+                             "these across the eval envs, so use a multiple of "
+                             "--n-eval-envs to sample every tax rung evenly "
+                             "(e.g. 2x for less noise).")
     parser.add_argument("--model-details", type=str, default="first_approach",
                         help="Key into ml/model_registry.yaml describing "
                              "this approach (default: first_approach)")
@@ -111,6 +125,15 @@ def _parse_args() -> TrainConfig:
                         help="Fix action space to support maps up to N hexes "
                              "(default: 384 = max campaign level). Override to "
                              "shrink for faster training on small maps only.")
+    parser.add_argument("--run-name", type=str, default=None,
+                        help="TensorBoard run/folder name. Defaults to the algo "
+                             "name (e.g. MaskablePPO); on --resume that reuses "
+                             "the latest folder. Set a distinct name to keep an "
+                             "experiment in its own TB folder.")
+    parser.add_argument("--reset-timesteps", action="store_true",
+                        help="When resuming, reset the timestep counter to 0 so "
+                             "the new run's x-axis starts at 0 (weights are still "
+                             "loaded). Off by default (resumes keep the count).")
     args = parser.parse_args()
 
     noop_opponents = args.difficulty == "noop"
@@ -136,10 +159,12 @@ def _parse_args() -> TrainConfig:
         territory_weight=args.territory_weight,
         opponent_weight=args.opponent_weight,
         income_weight=args.income_weight,
+        treasury_weight=args.treasury_weight,
         truncation_penalty=args.truncation_penalty,
         invalid_action_penalty=args.invalid_action_penalty,
         time_cost=args.time_cost,
         resume_path=args.resume,
+        reset_timesteps=args.reset_timesteps,
         early_stop=args.early_stop,
         win_rate_threshold=args.win_rate_threshold,
         early_stop_patience=args.early_stop_patience,
@@ -150,7 +175,9 @@ def _parse_args() -> TrainConfig:
         eval_max_turns=args.eval_max_turns,
         eval_max_steps=args.eval_max_steps,
         n_eval_envs=args.n_eval_envs,
+        eval_episodes=args.eval_episodes,
         model_details=args.model_details,
+        run_name=args.run_name,
         **({"action_space_hexes": args.action_space_hexes} if args.action_space_hexes else {}),
     )
     return cfg
@@ -185,6 +212,7 @@ def make_env(cfg: TrainConfig, rank: int = 0):
                 territory_weight=cfg.territory_weight,
                 opponent_weight=cfg.opponent_weight,
                 income_weight=cfg.income_weight,
+                treasury_weight=cfg.treasury_weight,
                 truncation_penalty=cfg.truncation_penalty,
             ),
             action_space_hexes=cfg.action_space_hexes,
@@ -222,6 +250,7 @@ def make_eval_env(cfg: TrainConfig, rank: int = 0, tax_rank: Optional[int] = Non
                 territory_weight=cfg.territory_weight,
                 opponent_weight=cfg.opponent_weight,
                 income_weight=cfg.income_weight,
+                treasury_weight=cfg.treasury_weight,
                 truncation_penalty=cfg.truncation_penalty,
             ),
             action_space_hexes=cfg.action_space_hexes,
@@ -459,7 +488,9 @@ def train(cfg: TrainConfig) -> None:
         print(f"  early stop: win_rate >= {cfg.win_rate_threshold} "
               f"for {cfg.early_stop_patience} consecutive evals")
     if cfg.resume_path:
-        print(f"  resuming from: {cfg.resume_path}")
+        reset_note = " (timestep counter reset to 0)" if cfg.reset_timesteps else ""
+        print(f"  resuming from: {cfg.resume_path}{reset_note}")
+    print(f"  tensorboard: {cfg.tensorboard_log}/{cfg.run_name or cfg.algorithm}_* ")
 
     logger = TrainingLogger(cfg, device)
     logger.start()
@@ -469,7 +500,10 @@ def train(cfg: TrainConfig) -> None:
         model.learn(
             total_timesteps=cfg.total_timesteps,
             callback=callbacks,
-            reset_num_timesteps=not cfg.resume_path,
+            # Fresh runs always reset; resumes keep the cumulative count unless
+            # --reset-timesteps is given (weights are loaded either way).
+            reset_num_timesteps=(not cfg.resume_path) or cfg.reset_timesteps,
+            tb_log_name=cfg.run_name or cfg.algorithm,
         )
         completed = True
     except KeyboardInterrupt:

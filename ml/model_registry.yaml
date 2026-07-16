@@ -27,3 +27,33 @@ models:
       rather than opponents; truncation penalised as heavily as a loss.
       Trained via a manual level-by-level curriculum with win-rate early
       stopping and resume-from-checkpoint.
+
+  economy_potential:
+    name: economy_potential
+    description: >
+      Continues from max_map_action_space (the "Easyish" level-0..5 model) with
+      reworked reward mechanics ("scheme 3"). Shaping is emitted per action; the
+      end-turn step emits none; after opponents move, the baseline absorbs only
+      ownership changes while the economy term (4*farms - trees on the agent's
+      land) is preserved as a continuous potential. This closes a reward-farming
+      hole (being paid to re-clear free tree regrowth) and adds direct signals
+      to keep the tree population down and to protect farms (losing a farm scores
+      -4*income_weight on the next step, without double-counting the hex).
+      income_weight is raised so economy is competitive with territory. Goal:
+      aggressive early expansion plus economy upkeep, to beat level 5 on merit.
+
+  treasury_potential:
+    name: treasury_potential
+    description: >
+      Continues from economy_potential. Folds a slice of the agent's bank
+      balance into the economy potential (economy += treasury_weight*treasury),
+      still per-step/telescoping. Motivation from replay analysis: the previous
+      model was money-blind — it used expensive units for cheap jobs (a strong
+      unit to clear a tree) and over-built into a bankruptcy spiral (unpaid units
+      -> graves -> trees), because spending/upkeep were only punished by the
+      delayed terminal loss. Now spending drops the potential immediately, so a
+      unit must recoup its cost through territory; idle-army upkeep is felt as a
+      continuous drain; and the bankruptcy path gets an early warning. Aim:
+      emergent cost-efficient unit choice and treasury management, without
+      hard-coding either. treasury_weight is small (~0.1) so productive spending
+      stays net-positive against a per-hex reward of territory_weight/384.

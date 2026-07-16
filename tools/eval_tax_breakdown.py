@@ -39,6 +39,8 @@ def _parse_args():
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--deterministic", action="store_true",
                    help="Greedy actions (default: sample, matching eval).")
+    p.add_argument("--label", default=None,
+                   help="Optional label to print above the table (e.g. model name).")
     return p.parse_args()
 
 
@@ -74,12 +76,16 @@ def main() -> int:
     print(f"Loading {args.model}", flush=True)
     model = MaskablePPO.load(args.model, device="cpu")
 
+    if args.label:
+        print(f"\n=== {args.label} ===", flush=True)
     print(f"\nLevel {args.level}, {args.games} games/tax, "
           f"difficulty={args.difficulty}, "
           f"{'greedy' if args.deterministic else 'sampled'} actions", flush=True)
-    print("(min/avg/max shown for turn and ownership columns)\n", flush=True)
+    print("(min/avg/max shown for turn, ownership, farm and tree columns)\n",
+          flush=True)
     header = (f"{'tax':>6} | {'win%':>5} | {'win turns (m/a/M)':>18} | "
-              f"{'lose turns (m/a/M)':>18} | {'lose own% (m/a/M)':>20}")
+              f"{'lose turns (m/a/M)':>18} | {'lose own% (m/a/M)':>20} | "
+              f"{'farms (m/a/M)':>16} | {'trees cleared (m/a/M)':>22}")
     print(header)
     print("-" * len(header))
 
@@ -93,10 +99,13 @@ def main() -> int:
         )
         wins = 0
         win_turns, lose_turns, lose_own = [], [], []
+        farms, trees = [], []
         try:
             for g in range(args.games):
                 info = _play(model, env, args.seed + g, args.deterministic)
                 turns = int(info.get("turn_count", 0))
+                farms.append(int(info.get("farms_built", 0)))
+                trees.append(int(info.get("trees_cleared", 0)))
                 if info.get("agent_won"):
                     wins += 1
                     win_turns.append(turns)
@@ -110,7 +119,8 @@ def main() -> int:
                 pass
         win_pct = 100.0 * wins / args.games
         print(f"{tax:>6.2f} | {win_pct:>4.0f}% | {_mmm(win_turns):>18} | "
-              f"{_mmm(lose_turns):>18} | {_mmm(lose_own, '{:.1f}'):>20}",
+              f"{_mmm(lose_turns):>18} | {_mmm(lose_own, '{:.1f}'):>20} | "
+              f"{_mmm(farms):>16} | {_mmm(trees):>22}",
               flush=True)
     return 0
 
